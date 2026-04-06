@@ -211,6 +211,32 @@ export function waitForReady(
   return false;
 }
 
+/**
+ * List all window names in a tmux session.
+ * Returns an empty array if the session doesn't exist.
+ */
+export function listWindows(tmuxSession: string): string[] {
+  try {
+    const output = exec(
+      `tmux list-windows -t ${shellEscape(tmuxSession)} -F "#{window_name}"`,
+    );
+    return output.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Kill an entire tmux session and all its windows.
+ */
+export function killSession(tmuxSession: string): void {
+  try {
+    exec(`tmux kill-session -t ${shellEscape(tmuxSession)}`);
+  } catch {
+    // Session may already be gone
+  }
+}
+
 /** Synchronous sleep using Atomics.wait on a SharedArrayBuffer. */
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

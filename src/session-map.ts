@@ -3,7 +3,9 @@ import {
   createWindow,
   isProcessAlive,
   isWindowReady,
+  killSession,
   killWindow,
+  listWindows,
   waitForReady,
   windowExists,
   type TmuxManagerOptions,
@@ -225,16 +227,84 @@ export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
     }
   }
 
+  // Also clean up orphaned windows not tracked in the sessions Map.
+  cleaned += cleanupOrphanedWindows(mergedConfig);
+
+  return cleaned;
+}
+
+/**
+ * The window name prefix used by this plugin.
+ */
+const WINDOW_PREFIX = "cc-";
+
+/**
+ * Clean up orphaned tmux windows that have the plugin's prefix but are
+ * not tracked in the in-memory sessions Map.
+ *
+ * This handles windows left behind after a gateway restart, plugin rename,
+ * or other situations where the in-memory state is lost.
+ *
+ * Also kills entire tmux sessions that were created by older plugin versions
+ * (e.g., `openclaw-claude`) if all their windows are orphaned.
+ */
+export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  let cleaned = 0;
+
+  // Collect all window names currently tracked in the sessions Map
+  const trackedWindows = new Set<string>();
+  for (const state of sessions.values()) {
+    trackedWindows.add(state.windowName);
+  }
+
+  // Scan the current tmux session for orphaned windows
+  const currentWindows = listWindows(mergedConfig.tmuxSession);
+  for (const winName of currentWindows) {
+    if (winName.startsWith(WINDOW_PREFIX) && !trackedWindows.has(winName)) {
+      killWindow(mergedConfig.tmuxSession, winName);
+      cleaned++;
+    }
+  }
+
+  // Scan for legacy tmux sessions from previous plugin versions.
+  // Known legacy session names that this plugin may have created.
+  const legacySessions = ["openclaw-claude"];
+  for (const legacySession of legacySessions) {
+    if (legacySession === mergedConfig.tmuxSession) continue;
+    const legacyWindows = listWindows(legacySession);
+    if (legacyWindows.length === 0) continue;
+
+    // Kill all cc-* windows in legacy sessions
+    for (const winName of legacyWindows) {
+      if (winName.startsWith(WINDOW_PREFIX)) {
+        killWindow(legacySession, winName);
+        cleaned++;
+      }
+    }
+    // If only the default "bash" window remains, kill the entire session
+    const remaining = listWindows(legacySession);
+    if (remaining.length === 0 || (remaining.length === 1 && remaining[0] === "bash")) {
+      killSession(legacySession);
+    }
+  }
+
   return cleaned;
 }
 
 /**
  * Start the periodic idle cleanup timer.
+ * Also runs an immediate orphan cleanup on startup to reclaim windows
+ * left behind by previous gateway runs.
  */
 export function startCleanupTimer(config: TmuxClaudeConfig = {}): void {
   if (cleanupTimer) return;
 
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+
+  // Run immediate orphan cleanup on startup
+  cleanupOrphanedWindows(mergedConfig);
+
   // Check every 5 minutes
   const intervalMs = Math.min(mergedConfig.idleTimeoutMs / 6, 5 * 60 * 1000);
 
