@@ -151,6 +151,23 @@ export function isWindowReady(tmuxSession: string, windowName: string): boolean 
 }
 
 /**
+ * Check if Claude Code is actively processing in the tmux pane.
+ * When Claude Code is working, the status line includes "esc to interrupt"
+ * (sometimes truncated to "esc to int" by terminal width).
+ * The REDACTED prompt is always visible in the TUI even during processing,
+ * so we cannot use it for idle detection.
+ */
+export function isClaudeProcessing(tmuxSession: string, windowName: string): boolean {
+  try {
+    const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
+    const content = exec(`tmux capture-pane -t ${target} -p`);
+    return content.includes("esc to int");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Wait for Claude Code to become ready in a tmux window.
  *
  * Phase 1: Wait for the `claude` process to appear (pane_current_command).

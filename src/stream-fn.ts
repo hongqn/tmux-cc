@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, isProcessAlive, isWindowReady } from "./tmux-manager.js";
+import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -409,10 +409,13 @@ async function pollForResponse(
       }
 
       // Fallback: Claude Code sometimes writes stop_reason: null even
-      // for final responses. Use the tmux pane prompt (REDACTED) as a
-      // secondary completion signal.
+      // for final responses. Check the tmux pane status line REDACTED if Claude
+      // Code is NOT actively processing (no "esc to interrupt" visible),
+      // treat the current text as the final response.
+      // Note: REDACTED is always visible in Claude Code's TUI, so we cannot
+      // use isWindowReady() for idle detection.
       if (!response.isComplete && response.text) {
-        if (isWindowReady(config.tmuxSession, session.windowName)) {
+        if (!isClaudeProcessing(config.tmuxSession, session.windowName)) {
           response.isComplete = true;
           return response;
         }
