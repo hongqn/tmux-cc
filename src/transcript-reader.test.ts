@@ -21,7 +21,7 @@ describe("transcript-reader", () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = join(tmpdir(), `tmux-claude-test-${randomUUID()}`);
+    tempDir = join(tmpdir(), `tmux-cc-test-${randomUUID()}`);
     mkdirSync(tempDir, { recursive: true });
   });
 

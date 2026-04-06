@@ -1,16 +1,16 @@
 {
-  "id": "tmux-claude",
+  "id": "tmux-cc",
   "enabledByDefault": false,
-  "providers": ["tmux-claude"],
+  "providers": ["tmux-cc"],
   "providerAuthEnvVars": {},
   "providerAuthChoices": [
     {
-      "provider": "tmux-claude",
+      "provider": "tmux-cc",
       "method": "local",
-      "choiceId": "tmux-claude",
+      "choiceId": "tmux-cc",
       "choiceLabel": "Claude Code (tmux)",
       "choiceHint": "Claude Code CLI running in tmux sessions",
-      "groupId": "tmux-claude",
+      "groupId": "tmux-cc",
       "groupLabel": "Claude Code (tmux)"
     }
   ],
@@ -30,7 +30,7 @@
       "tmuxSession": {
         "type": "string",
         "description": "Name of the tmux session to use",
-        "default": "openclaw-claude"
+        "default": "openclaw-cc"
       },
       "pollingIntervalMs": {
         "type": "number",

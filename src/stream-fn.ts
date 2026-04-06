@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 /**
- * Custom StreamFn implementation for the tmux-claude provider.
+ * Custom StreamFn implementation for the tmux-cc provider.
  *
  * This StreamFn extracts new user messages from OpenClaw's context,
  * sends them to Claude Code via tmux send-keys, polls the JSONL
@@ -72,7 +72,7 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
 }
 
 /**
- * Create the StreamFn for the tmux-claude provider.
+ * Create the StreamFn for the tmux-cc provider.
  *
  * The returned function:
  * 1. Derives a session key from the first user message (stable per conversation)
@@ -198,7 +198,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           message: assistantMessage,
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error in tmux-claude";
+        const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         emitError(stream, message);
       }
     };
@@ -491,7 +491,7 @@ function buildAssistantMessage(response: AssistantResponse): AssistantMessage {
     role: "assistant",
     content,
     api: "anthropic-v1",
-    provider: "tmux-claude",
+    provider: "tmux-cc",
     model: "claude-code",
     usage: {
       input: 0,

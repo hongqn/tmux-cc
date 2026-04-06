@@ -1,4 +1,4 @@
-# tmux-claude Provider Plugin
+# tmux-cc Provider Plugin
 
 An OpenClaw provider plugin that delegates all AI inference to [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) running in persistent tmux sessions.
 
@@ -29,7 +29,7 @@ Each OpenClaw conversation session maps to a dedicated tmux window running a Cla
 The plugin is bundled with OpenClaw. Enable it in your config:
 
 ```bash
-openclaw config set plugins.tmux-claude.enabled true
+openclaw config set plugins.tmux-cc.enabled true
 ```
 
 ## Configuration
@@ -38,25 +38,25 @@ All settings are optional. Configure via `openclaw config set`:
 
 | Key                                     | Default           | Description                                  |
 | --------------------------------------- | ----------------- | -------------------------------------------- |
-| `plugins.tmux-claude.workingDirectory`  | `process.cwd()`   | Working directory for Claude Code sessions   |
-| `plugins.tmux-claude.claudeCommand`     | `claude`          | Path to Claude Code CLI executable           |
-| `plugins.tmux-claude.tmuxSession`       | `openclaw-claude` | Name of the tmux session to use              |
-| `plugins.tmux-claude.pollingIntervalMs` | `1000`            | Polling interval for transcript reading (ms) |
-| `plugins.tmux-claude.responseTimeoutMs` | `300000`          | Max time to wait for a response (ms)         |
-| `plugins.tmux-claude.idleTimeoutMs`     | `1800000`         | Idle timeout before session cleanup (ms)     |
-| `plugins.tmux-claude.defaultModel`      | `sonnet-4.6`      | Default Claude model                         |
+| `plugins.tmux-cc.workingDirectory`  | `process.cwd()`   | Working directory for Claude Code sessions   |
+| `plugins.tmux-cc.claudeCommand`     | `claude`          | Path to Claude Code CLI executable           |
+| `plugins.tmux-cc.tmuxSession`       | `openclaw-claude` | Name of the tmux session to use              |
+| `plugins.tmux-cc.pollingIntervalMs` | `1000`            | Polling interval for transcript reading (ms) |
+| `plugins.tmux-cc.responseTimeoutMs` | `300000`          | Max time to wait for a response (ms)         |
+| `plugins.tmux-cc.idleTimeoutMs`     | `1800000`         | Idle timeout before session cleanup (ms)     |
+| `plugins.tmux-cc.defaultModel`      | `sonnet-4.6`      | Default Claude model                         |
 
 ### Model Selection
 
 Select a model by setting the gateway model to one of:
 
-- `tmux-claude/opus-4.6`
-- `tmux-claude/sonnet-4.6`
-- `tmux-claude/sonnet-4.5`
-- `tmux-claude/haiku-4.5`
+- `tmux-cc/opus-4.6`
+- `tmux-cc/sonnet-4.6`
+- `tmux-cc/sonnet-4.5`
+- `tmux-cc/haiku-4.5`
 
 ```bash
-openclaw config set models.default tmux-claude/sonnet-4.6
+openclaw config set models.default tmux-cc/sonnet-4.6
 ```
 
 ## Context and CLAUDE.md
@@ -125,7 +125,7 @@ Claude Code writes transcripts to `~/.claude/projects/<encoded-cwd>/`. Verify th
 
 ```bash
 # Run tests
-cd extensions/tmux-claude
+cd extensions/tmux-cc
 npx vitest run
 
 # Run with verbose output

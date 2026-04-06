@@ -8,7 +8,7 @@ const mockHomeDir = vi.hoisted(() => {
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
   const { join } = require("node:path");
-  return mkdtempSync(join(tmpdir(), "tmux-claude-persist-test-"));
+  return mkdtempSync(join(tmpdir(), "tmux-cc-persist-test-"));
 });
 
 vi.mock("node:os", async () => {
@@ -28,7 +28,7 @@ import {
 
 describe("session-persistence", () => {
   const persistDir = join(mockHomeDir, ".openclaw");
-  const persistPath = join(persistDir, "tmux-claude-sessions.json");
+  const persistPath = join(persistDir, "tmux-cc-sessions.json");
 
   beforeEach(() => {
     // Ensure clean state

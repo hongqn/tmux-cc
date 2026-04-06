@@ -5,7 +5,7 @@
  * gateway and the tmux window have been restarted (e.g., idle timeout
  * reclamation followed by a new message).
  *
- * Storage: ~/.openclaw/tmux-claude-sessions.json
+ * Storage: ~/.openclaw/tmux-cc-sessions.json
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -25,7 +25,7 @@ interface PersistedData {
 }
 
 const PERSIST_DIR = join(homedir(), ".openclaw");
-const PERSIST_PATH = join(PERSIST_DIR, "tmux-claude-sessions.json");
+const PERSIST_PATH = join(PERSIST_DIR, "tmux-cc-sessions.json");
 
 /** Max age for persisted entries (7 days). Stale entries are pruned on load. */
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;

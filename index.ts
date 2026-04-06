@@ -1,5 +1,5 @@
 /**
- * tmux-claude provider plugin entry point.
+ * tmux-cc provider plugin entry point.
  *
  * Registers a provider that delegates all inference to Claude Code CLI
  * running in persistent tmux sessions. OpenClaw handles channel routing;
@@ -13,7 +13,7 @@ import { createTmuxClaudeStreamFn } from "./src/stream-fn.js";
 import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
 
-const PROVIDER_ID = "tmux-claude";
+const PROVIDER_ID = "tmux-cc";
 
 /** Claude models available through Claude Code CLI. */
 const CLAUDE_MODELS = [
@@ -58,7 +58,7 @@ function getPluginConfig(config: Record<string, unknown> | undefined): TmuxClaud
   const pluginConfig = (config as Record<string, unknown>)?.plugins as
     | Record<string, unknown>
     | undefined;
-  const tmuxClaudeConfig = pluginConfig?.["tmux-claude"] as TmuxClaudeConfig | undefined;
+  const tmuxClaudeConfig = pluginConfig?.["tmux-cc"] as TmuxClaudeConfig | undefined;
   return tmuxClaudeConfig ?? {};
 }
 
@@ -67,7 +67,7 @@ function getPluginConfig(config: Record<string, unknown> | undefined): TmuxClaud
  * Looks up the claudeModelId from the CLAUDE_MODELS table.
  */
 function extractClaudeModelId(modelId: string): string {
-  // Strip provider prefix if present (legacy "tmux-claude/sonnet-4.6" format)
+  // Strip provider prefix if present (legacy "tmux-cc/sonnet-4.6" format)
   const bare = modelId.includes("/") ? modelId.split("/").slice(1).join("/") : modelId;
   const match = CLAUDE_MODELS.find((m) => m.id === bare);
   return match?.claudeModelId ?? bare;
@@ -108,7 +108,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Claude Code (tmux)",
-      docsPath: "/providers/tmux-claude",
+      docsPath: "/providers/tmux-cc",
 
       auth: [
         {
@@ -154,7 +154,7 @@ export default definePluginEntry({
 
           return {
             provider: {
-              baseUrl: "local://tmux-claude",
+              baseUrl: "local://tmux-cc",
               api: "anthropic-v1",
               models: CLAUDE_MODELS.map((m) => ({
                 id: m.id,
@@ -205,8 +205,8 @@ export default definePluginEntry({
         })),
 
       resolveSyntheticAuth: () => ({
-        apiKey: "tmux-claude-local",
-        source: "tmux-claude synthetic local auth (no real key needed)",
+        apiKey: "tmux-cc-local",
+        source: "tmux-cc synthetic local auth (no real key needed)",
         mode: "api-key" as const,
       }),
 

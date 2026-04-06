@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MCP Tools Server for the tmux-claude provider plugin.
+ * MCP Tools Server for the tmux-cc provider plugin.
  *
  * Exposes OpenClaw's agent tools (sessions_send, message, cron, etc.)
  * to Claude Code via the Model Context Protocol (stdio transport).

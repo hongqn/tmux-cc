@@ -1,5 +1,5 @@
 /**
- * Shared types for the tmux-claude provider plugin.
+ * Shared types for the tmux-cc provider plugin.
  */
 
 /** Plugin configuration schema. */
@@ -23,7 +23,7 @@ export interface TmuxClaudeConfig {
 export const DEFAULT_CONFIG: Required<TmuxClaudeConfig> = {
   workingDirectory: process.cwd(),
   claudeCommand: "claude",
-  tmuxSession: "openclaw-claude",
+  tmuxSession: "openclaw-cc",
   pollingIntervalMs: 1000,
   responseTimeoutMs: 300_000,
   idleTimeoutMs: 1_800_000,

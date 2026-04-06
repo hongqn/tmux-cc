@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 /**
- * Acceptance tests for the tmux-claude provider plugin.
+ * Acceptance tests for the tmux-cc provider plugin.
  *
  * Tests the end-to-end flow by mocking:
  * - tmux commands (via child_process.execSync)
@@ -258,7 +258,7 @@ describe("acceptance: transcript reading", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "tmux-claude-test-"));
+    tmpDir = mkdtempSync(join(tmpdir(), "tmux-cc-test-"));
   });
 
   afterEach(() => {

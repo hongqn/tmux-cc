@@ -14,5 +14,8 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.63.1"
   }
 }
