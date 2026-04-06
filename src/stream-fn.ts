@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, isProcessAlive } from "./tmux-manager.js";
+import { sendKeys, isProcessAlive, isWindowReady } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -406,6 +406,16 @@ async function pollForResponse(
 
       if (response.isComplete && response.text) {
         return response;
+      }
+
+      // Fallback: Claude Code sometimes writes stop_reason: null even
+      // for final responses. Use the tmux pane prompt (REDACTED) as a
+      // secondary completion signal.
+      if (!response.isComplete && response.text) {
+        if (isWindowReady(config.tmuxSession, session.windowName)) {
+          response.isComplete = true;
+          return response;
+        }
       }
     }
 
