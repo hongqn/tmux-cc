@@ -1,0 +1,57 @@
+{
+  "id": "tmux-claude",
+  "enabledByDefault": false,
+  "providers": ["tmux-claude"],
+  "providerAuthEnvVars": {},
+  "providerAuthChoices": [
+    {
+      "provider": "tmux-claude",
+      "method": "local",
+      "choiceId": "tmux-claude",
+      "choiceLabel": "Claude Code (tmux)",
+      "choiceHint": "Claude Code CLI running in tmux sessions",
+      "groupId": "tmux-claude",
+      "groupLabel": "Claude Code (tmux)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workingDirectory": {
+        "type": "string",
+        "description": "Working directory for Claude Code sessions (where CLAUDE.md lives)"
+      },
+      "claudeCommand": {
+        "type": "string",
+        "description": "Path to Claude Code CLI executable",
+        "default": "claude"
+      },
+      "tmuxSession": {
+        "type": "string",
+        "description": "Name of the tmux session to use",
+        "default": "openclaw-claude"
+      },
+      "pollingIntervalMs": {
+        "type": "number",
+        "description": "Polling interval for JSONL transcript in milliseconds",
+        "default": 1000
+      },
+      "responseTimeoutMs": {
+        "type": "number",
+        "description": "Maximum time to wait for a response in milliseconds",
+        "default": 300000
+      },
+      "idleTimeoutMs": {
+        "type": "number",
+        "description": "Time after which idle Claude Code instances are cleaned up in milliseconds",
+        "default": 1800000
+      },
+      "defaultModel": {
+        "type": "string",
+        "description": "Default Claude model to use",
+        "default": "sonnet-4.6"
+      }
+    }
+  }
+}

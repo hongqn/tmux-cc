@@ -1,0 +1,285 @@
+import { getPersistedClaudeSessionId, persistSession } from "./session-persistence.js";
+import {
+  createWindow,
+  isProcessAlive,
+  isWindowReady,
+  killWindow,
+  waitForReady,
+  windowExists,
+  type TmuxManagerOptions,
+  type CreateWindowOptions,
+} from "./tmux-manager.js";
+import {
+  findLatestTranscript,
+  findTranscriptBySessionId,
+  getExistingTranscriptPaths,
+  extractSessionId,
+} from "./transcript-reader.js";
+/**
+ * Maps OpenClaw session keys to tmux windows running Claude Code.
+ *
+ * Each OpenClaw conversation (identified by a session key) gets its own
+ * tmux window with a dedicated Claude Code instance.
+ */
+import type { SessionState, TmuxClaudeConfig } from "./types.js";
+import { DEFAULT_CONFIG } from "./types.js";
+
+/** In-memory map of session key REDACTED session state. */
+const sessions = new Map<string, SessionState>();
+
+/** Handle for the idle cleanup interval timer. */
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Generate a tmux window name from an OpenClaw session key.
+ * Sanitizes the key to be a valid tmux window name.
+ */
+export function windowNameFromSessionKey(sessionKey: string): string {
+  // Replace non-alphanumeric chars with dashes, truncate to 50 chars
+  const sanitized = sessionKey.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
+  return `cc-${sanitized}`;
+}
+
+/**
+ * Get the current session state for a session key, or null if none exists.
+ */
+export function getSession(sessionKey: string): SessionState | null {
+  return sessions.get(sessionKey) ?? null;
+}
+
+/**
+ * Get or create a session for the given session key.
+ *
+ * If no session exists, creates a new tmux window with Claude Code.
+ * If the session exists but Claude Code has crashed, restarts it with --resume.
+ */
+export function getOrCreateSession(
+  sessionKey: string,
+  model: string,
+  config: TmuxClaudeConfig = {},
+): SessionState {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  const existing = sessions.get(sessionKey);
+
+  if (existing) {
+    // Check if the process is still alive
+    if (isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
+      existing.lastActivityMs = Date.now();
+      return existing;
+    }
+
+    // Process died REDACTED restart with --resume
+    return restartSession(existing, mergedConfig);
+  }
+
+  // Create a new session
+  return createNewSession(sessionKey, model, mergedConfig);
+}
+
+/**
+ * Create a new Claude Code session in a tmux window.
+ */
+function createNewSession(
+  sessionKey: string,
+  model: string,
+  config: Required<TmuxClaudeConfig>,
+): SessionState {
+  const windowName = windowNameFromSessionKey(sessionKey);
+
+  // Check if an existing window with this name is still alive and ready
+  // (e.g., from a previous gateway run). Reconnect instead of killing it
+  // to preserve Claude Code's conversation history.
+  if (
+    windowExists(config.tmuxSession, windowName) &&
+    isProcessAlive(config.tmuxSession, windowName) &&
+    isWindowReady(config.tmuxSession, windowName)
+  ) {
+    // Snapshot existing transcript files so pollForResponse can find the
+    // NEW file that Claude Code creates when it receives the next message.
+    // We can't predict which file will be active REDACTED Claude Code may start
+    // a new session even in a reconnected window.
+    const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+
+    const state: SessionState = {
+      sessionKey,
+      windowName,
+      transcriptOffset: 0,
+      lastActivityMs: Date.now(),
+      model,
+      existingTranscriptPaths: existingFiles,
+    };
+
+    sessions.set(sessionKey, state);
+    return state;
+  }
+
+  const tmuxOpts: TmuxManagerOptions = {
+    tmuxSession: config.tmuxSession,
+    claudeCommand: config.claudeCommand,
+    workingDirectory: config.workingDirectory,
+  };
+
+  // Check if we have a persisted Claude session ID from a previous run.
+  // This enables --resume even after the tmux window was reclaimed.
+  const persistedClaudeId = getPersistedClaudeSessionId(sessionKey);
+
+  const windowOpts: CreateWindowOptions = {
+    windowName,
+    model,
+    resumeSessionId: persistedClaudeId,
+  };
+
+  // Snapshot existing transcript files BEFORE creating the window so we can
+  // identify the new file that belongs to our session after message is sent.
+  const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+
+  // Kill any orphaned tmux window with the same name from a previous gateway
+  // run to avoid ambiguous tmux targets.
+  if (windowExists(config.tmuxSession, windowName)) {
+    killWindow(config.tmuxSession, windowName);
+  }
+
+  createWindow(tmuxOpts, windowOpts);
+
+  // Wait for Claude Code to start
+  waitForReady(config.tmuxSession, windowName);
+
+  // Don't discover transcript here REDACTED Claude Code creates the file when the
+  // first message is sent, not at startup. Store the snapshot so
+  // pollForResponse can find the NEW file after sendKeys.
+  const state: SessionState = {
+    sessionKey,
+    windowName,
+    transcriptOffset: 0,
+    lastActivityMs: Date.now(),
+    model,
+    existingTranscriptPaths: existingFiles,
+    claudeSessionId: persistedClaudeId,
+  };
+
+  sessions.set(sessionKey, state);
+  return state;
+}
+
+/**
+ * Restart a crashed Claude Code session using --resume.
+ */
+function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): SessionState {
+  // Kill the old window if it still exists
+  killWindow(config.tmuxSession, state.windowName);
+
+  const tmuxOpts: TmuxManagerOptions = {
+    tmuxSession: config.tmuxSession,
+    claudeCommand: config.claudeCommand,
+    workingDirectory: config.workingDirectory,
+  };
+
+  const windowOpts: CreateWindowOptions = {
+    windowName: state.windowName,
+    model: state.model,
+    resumeSessionId: state.claudeSessionId,
+  };
+
+  createWindow(tmuxOpts, windowOpts);
+  waitForReady(config.tmuxSession, state.windowName);
+
+  state.lastActivityMs = Date.now();
+  return state;
+}
+
+/**
+ * Try to discover the Claude Code transcript file for a session.
+ * Updates the session state with the transcript path and session ID.
+ */
+function discoverTranscript(state: SessionState, workingDirectory: string): void {
+  if (state.claudeSessionId) {
+    // If we know the session ID, look for its specific file
+    const path = findTranscriptBySessionId(workingDirectory, state.claudeSessionId);
+    if (path) {
+      state.transcriptPath = path;
+      return;
+    }
+  }
+
+  // Fall back to the most recent transcript file
+  const path = findLatestTranscript(workingDirectory);
+  if (path) {
+    state.transcriptPath = path;
+    state.claudeSessionId = extractSessionId(path);
+  }
+}
+
+/**
+ * Clean up idle sessions that have exceeded the idle timeout.
+ */
+export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  const now = Date.now();
+  let cleaned = 0;
+
+  for (const [key, state] of sessions) {
+    if (now - state.lastActivityMs > mergedConfig.idleTimeoutMs) {
+      killWindow(mergedConfig.tmuxSession, state.windowName);
+      sessions.delete(key);
+      cleaned++;
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Start the periodic idle cleanup timer.
+ */
+export function startCleanupTimer(config: TmuxClaudeConfig = {}): void {
+  if (cleanupTimer) return;
+
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  // Check every 5 minutes
+  const intervalMs = Math.min(mergedConfig.idleTimeoutMs / 6, 5 * 60 * 1000);
+
+  cleanupTimer = setInterval(() => {
+    cleanupIdleSessions(mergedConfig);
+  }, intervalMs);
+
+  // Don't block process exit
+  if (cleanupTimer.unref) {
+    cleanupTimer.unref();
+  }
+}
+
+/**
+ * Stop the periodic idle cleanup timer.
+ */
+export function stopCleanupTimer(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
+/**
+ * Destroy all sessions and clean up resources.
+ */
+export function destroyAllSessions(config: TmuxClaudeConfig = {}): void {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  for (const [key, state] of sessions) {
+    killWindow(mergedConfig.tmuxSession, state.windowName);
+    sessions.delete(key);
+  }
+  stopCleanupTimer();
+}
+
+/**
+ * Get the count of active sessions.
+ */
+export function getSessionCount(): number {
+  return sessions.size;
+}
+
+/**
+ * Get all active session keys.
+ */
+export function getSessionKeys(): string[] {
+  return Array.from(sessions.keys());
+}
