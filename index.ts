@@ -5,7 +5,7 @@
  * running in persistent tmux sessions. OpenClaw handles channel routing;
  * Claude Code handles context, reasoning, and tool use.
  */
-import { writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
@@ -99,6 +99,94 @@ function writeMcpSettings(workingDirectory: string): void {
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
+const DEFAULT_CLAUDE_MD = `# Claude Code Project Instructions
+
+Read and follow the instructions in these files (in order):
+
+1. \`AGENTS.md\` REDACTED Workspace rules, behavior guidelines, and constraints
+2. \`SOUL.md\` REDACTED Character, personality, and communication style
+3. \`MEMORY.md\` REDACTED Conversation history, learned preferences, and context
+
+---
+
+## Messaging Protocol
+
+You are receiving messages from users through a messaging gateway.
+Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` REDACTED use these to identify who is speaking.
+
+### Silent Replies (NO_REPLY)
+
+When you have nothing meaningful to say (e.g., a message wasn't directed at you, or it's just noise), respond with ONLY:
+
+\`\`\`
+NO_REPLY
+\`\`\`
+
+Rules:
+- It must be your ENTIRE message REDACTED nothing else
+- Never append it to an actual response
+- Never wrap it in markdown or code blocks
+
+### Heartbeat Protocol (HEARTBEAT_OK)
+
+You may receive heartbeat poll messages. If you receive one and there is nothing that needs attention, reply exactly:
+
+\`\`\`
+HEARTBEAT_OK
+\`\`\`
+
+If something needs attention, do NOT include "HEARTBEAT_OK" REDACTED reply with the alert/update text instead.
+If \`HEARTBEAT.md\` exists, read it and follow its instructions during heartbeats.
+`;
+
+/**
+ * Ensure CLAUDE.md exists in the working directory.
+ * Silently skips if the file already exists.
+ */
+function ensureClaudeMd(workingDirectory: string): void {
+  const claudeMdPath = join(workingDirectory, "CLAUDE.md");
+  if (existsSync(claudeMdPath)) return;
+  writeFileSync(claudeMdPath, DEFAULT_CLAUDE_MD);
+}
+
+/**
+ * Ensure .claude/skills symlink points to the workspace skills directory.
+ * Silently skips if the symlink already exists or no skills/ directory is present.
+ */
+function ensureSkillsSymlink(workingDirectory: string): void {
+  const skillsDir = join(workingDirectory, "skills");
+  if (!existsSync(skillsDir)) return;
+
+  const claudeDir = join(workingDirectory, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
+
+  const symlinkPath = join(claudeDir, "skills");
+  if (existsSync(symlinkPath)) {
+    // Check if it's already a symlink pointing to the right place
+    try {
+      readlinkSync(symlinkPath);
+    } catch {
+      // Not a symlink or can't read REDACTED leave it alone
+    }
+    return;
+  }
+
+  // Create relative symlink: .claude/skills -> ../skills
+  symlinkSync("../skills", symlinkPath);
+}
+
+/**
+ * Set up the workspace for Claude Code:
+ * - Write MCP settings
+ * - Ensure CLAUDE.md exists
+ * - Ensure .claude/skills symlink exists
+ */
+function setupWorkspace(workingDirectory: string): void {
+  writeMcpSettings(workingDirectory);
+  ensureClaudeMd(workingDirectory);
+  ensureSkillsSymlink(workingDirectory);
+}
+
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Claude Code (tmux) Provider",
@@ -149,8 +237,8 @@ export default definePluginEntry({
           const pluginConfig = getPluginConfig(ctx.config as unknown as Record<string, unknown>);
           const mergedConfig = { ...DEFAULT_CONFIG, ...pluginConfig };
 
-          // Write MCP settings for Claude Code
-          writeMcpSettings(mergedConfig.workingDirectory);
+          // Set up workspace (MCP settings, CLAUDE.md, skills symlink)
+          setupWorkspace(mergedConfig.workingDirectory);
 
           return {
             provider: {
