@@ -488,6 +488,66 @@ describe("transcript-reader", () => {
       expect(response.text).toBe("Intermediate text");
       expect(response.isComplete).toBe(false);
     });
+
+    it("ignores stale assistant entries from a previous turn when a user entry follows", () => {
+      // Bug scenario: after --resume, the batch straddles two turns:
+      // [old_assistant (complete), new_user] REDACTED the old assistant must be skipped.
+      const entries: TranscriptEntry[] = [
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text" as const, text: "No response requested." }],
+          },
+          sessionId: "s1",
+          stop_reason: "stop_sequence",
+        },
+        {
+          type: "user",
+          message: {
+            content: [{ type: "text" as const, text: "Please analyse this PDF." }],
+          },
+          sessionId: "s1",
+        },
+      ];
+
+      const response = extractAssistantResponse(entries);
+      // Should NOT return the stale "No response requested." from the previous turn
+      expect(response.text).toBe("");
+      expect(response.isComplete).toBe(false);
+    });
+
+    it("returns assistant response that appears after the last user entry", () => {
+      // Normal case: [old_assistant, new_user, new_assistant]
+      const entries: TranscriptEntry[] = [
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text" as const, text: "Stale response" }],
+          },
+          sessionId: "s1",
+          stop_reason: "end_turn",
+        },
+        {
+          type: "user",
+          message: {
+            content: [{ type: "text" as const, text: "New question" }],
+          },
+          sessionId: "s1",
+        },
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text" as const, text: "Fresh response" }],
+          },
+          sessionId: "s1",
+          stop_reason: "end_turn",
+        },
+      ];
+
+      const response = extractAssistantResponse(entries);
+      expect(response.text).toBe("Fresh response");
+      expect(response.isComplete).toBe(true);
+    });
   });
 
   describe("isResponseComplete", () => {

@@ -292,9 +292,29 @@ export function extractAssistantResponse(
   entries: TranscriptEntry[],
   opts?: { collectAllText?: boolean },
 ): AssistantResponse {
-  // Check if a turn_duration system entry is present REDACTED this is the
-  // reliable signal that Claude Code has finished the entire turn.
-  const hasTurnDuration = entries.some((e) => e.type === "system" && e.subtype === "turn_duration");
+  // Find the last user entry to separate previous-turn and current-turn data.
+  // When reading from a snapshot offset after --resume, the batch may contain
+  // trailing entries from the previous turn (e.g., a stale assistant response)
+  // followed by the current turn's user message.  We must only consider
+  // assistant entries AFTER the last user entry to avoid returning stale data.
+  let lastUserIdx = -1;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].type === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  // Start scanning from after the last user entry (current turn only).
+  // If no user entry exists in the batch, scan all entries (we're in the
+  // middle of an ongoing response from a previous poll).
+  const scanStart = lastUserIdx >= 0 ? lastUserIdx + 1 : 0;
+
+  // Check if a turn_duration system entry is present AFTER the last user
+  // entry REDACTED this is the reliable signal that the current turn is finished.
+  const hasTurnDuration = entries
+    .slice(scanStart)
+    .some((e) => e.type === "system" && e.subtype === "turn_duration");
 
   // Collect thinking from ALL assistant entries in this turn.
   // Normal mode: take text only from the LAST assistant entry (the final answer).
@@ -305,7 +325,7 @@ export function extractAssistantResponse(
   let lastAssistantIdx = -1;
   let lastSessionId: string | undefined;
 
-  for (let i = 0; i < entries.length; i++) {
+  for (let i = scanStart; i < entries.length; i++) {
     if (entries[i].type !== "assistant") continue;
     lastAssistantIdx = i;
     lastSessionId = entries[i].sessionId ?? lastSessionId;
@@ -321,7 +341,7 @@ export function extractAssistantResponse(
   }
 
   if (lastAssistantIdx === -1) {
-    return { text: "", isComplete: false };
+    return { text: "", isComplete: false, sessionId: lastSessionId };
   }
 
   const lastEntry = entries[lastAssistantIdx];
