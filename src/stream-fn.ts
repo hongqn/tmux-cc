@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing } from "./tmux-manager.js";
+import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -531,7 +531,15 @@ async function pollForResponse(
       // process dead).  When it exits mid-turn the transcript stops
       // growing, so we'd otherwise spin here until the timeout.
       if (!isProcessAlive(config.tmuxSession, session.windowName)) {
-        console.log(`[tmux-cc] poll #${pollCount}: CC process died, re-reading full response from offset ${effectiveOffsetBeforeSend}`);
+        // Capture crash diagnostics before anything else
+        const exitCode = readExitCode(session.windowName);
+        const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
+        console.error(`[tmux-cc] poll #${pollCount}: CC process died. exitCode=${exitCode ?? "unknown"}`);
+        if (paneContent) {
+          console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+        }
+
+        console.log(`[tmux-cc] re-reading full response from offset ${effectiveOffsetBeforeSend}`);
         // Re-read ALL entries since the message was sent to capture
         // any partial assistant text written before the exit.
         // Use collectAllText to gather text from ALL assistant entries,

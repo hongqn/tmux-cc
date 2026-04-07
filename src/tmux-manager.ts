@@ -9,6 +9,7 @@ import { execSync, type ExecSyncOptionsWithStringEncoding } from "node:child_pro
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
 const READY_TIMEOUT_MS = 30_000;
+const CC_EXIT_DIR = "/tmp/cc-exit";
 
 export interface TmuxManagerOptions {
   /** Name of the tmux session to use. */
@@ -72,8 +73,12 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   const cmd = args.map(shellEscape).join(" ");
   const target = `${shellEscape(opts.tmuxSession)}`;
 
+  // Wrap command to capture exit code when CC exits
+  const exitFile = `${CC_EXIT_DIR}/${windowOpts.windowName}`;
+  const wrappedCmd = `mkdir -p ${shellEscape(CC_EXIT_DIR)} && ${cmd}; echo $? > ${shellEscape(exitFile)}`;
+
   exec(
-    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${shellEscape(cmd)}`,
+    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${shellEscape(wrappedCmd)}`,
   );
 }
 
@@ -133,6 +138,42 @@ export function killWindow(tmuxSession: string, windowName: string): void {
     exec(`tmux kill-window -t ${target}`);
   } catch {
     // Window may already be gone
+  }
+  // Clean up exit code file
+  try {
+    const { unlinkSync } = require("node:fs");
+    unlinkSync(`${CC_EXIT_DIR}/${windowName}`);
+  } catch {
+    // File may not exist
+  }
+}
+
+/**
+ * Capture the last N lines from a tmux pane.
+ * Useful for crash diagnostics REDACTED captures error messages CC may have
+ * printed before exiting.
+ */
+export function capturePane(tmuxSession: string, windowName: string, lines = 50): string {
+  try {
+    const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
+    return exec(`tmux capture-pane -t ${target} -p -S -${lines}`);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Read the exit code of a CC process that has exited.
+ * Returns the exit code as a number, or null if unavailable.
+ */
+export function readExitCode(windowName: string): number | null {
+  try {
+    const { readFileSync } = require("node:fs");
+    const content = readFileSync(`${CC_EXIT_DIR}/${windowName}`, "utf-8").trim();
+    const code = parseInt(content, 10);
+    return isNaN(code) ? null : code;
+  } catch {
+    return null;
   }
 }
 
