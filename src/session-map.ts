@@ -66,15 +66,18 @@ export function getOrCreateSession(
   if (existing) {
     // Check if the process is still alive
     if (isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
+      console.log(`[tmux-cc] getOrCreateSession: reusing existing session key=${sessionKey}, window=${existing.windowName}`);
       existing.lastActivityMs = Date.now();
       return existing;
     }
 
     // Process died REDACTED restart with --resume
+    console.log(`[tmux-cc] getOrCreateSession: restarting dead session key=${sessionKey}, window=${existing.windowName}`);
     return restartSession(existing, mergedConfig);
   }
 
   // Create a new session
+  console.log(`[tmux-cc] getOrCreateSession: creating new session key=${sessionKey}`);
   return createNewSession(sessionKey, model, mergedConfig);
 }
 
@@ -101,6 +104,7 @@ function createNewSession(
     // We can't predict which file will be active REDACTED Claude Code may start
     // a new session even in a reconnected window.
     const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+    console.log(`[tmux-cc] createNewSession: reconnecting to existing window=${windowName}, snapshotFiles=${existingFiles.size}`);
 
     const state: SessionState = {
       sessionKey,
@@ -124,6 +128,7 @@ function createNewSession(
   // Check if we have a persisted Claude session ID from a previous run.
   // This enables --resume even after the tmux window was reclaimed.
   const persistedClaudeId = getPersistedClaudeSessionId(sessionKey);
+  console.log(`[tmux-cc] createNewSession: key=${sessionKey}, window=${windowName}, model=${model}, persistedId=${persistedClaudeId ?? "none"}, cwd=${config.workingDirectory}`);
 
   const windowOpts: CreateWindowOptions = {
     windowName,
@@ -134,17 +139,20 @@ function createNewSession(
   // Snapshot existing transcript files BEFORE creating the window so we can
   // identify the new file that belongs to our session after message is sent.
   const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+  console.log(`[tmux-cc] createNewSession: snapshot has ${existingFiles.size} existing transcript files`);
 
   // Kill any orphaned tmux window with the same name from a previous gateway
   // run to avoid ambiguous tmux targets.
   if (windowExists(config.tmuxSession, windowName)) {
+    console.log(`[tmux-cc] createNewSession: killing orphaned window=${windowName}`);
     killWindow(config.tmuxSession, windowName);
   }
 
   createWindow(tmuxOpts, windowOpts);
 
   // Wait for Claude Code to start
-  waitForReady(config.tmuxSession, windowName);
+  const ready = waitForReady(config.tmuxSession, windowName);
+  console.log(`[tmux-cc] createNewSession: waitForReady=${ready}`);
 
   // Don't discover transcript here REDACTED Claude Code creates the file when the
   // first message is sent, not at startup. Store the snapshot so
@@ -182,9 +190,20 @@ function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>)
     resumeSessionId: state.claudeSessionId,
   };
 
-  createWindow(tmuxOpts, windowOpts);
-  waitForReady(config.tmuxSession, state.windowName);
+  // Snapshot existing transcript files BEFORE creating the new window so
+  // pollForResponse can discover the new file Claude Code writes to after
+  // the restart.  Without this, polling continues reading the old (stale)
+  // transcript file and times out.
+  const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
 
+  createWindow(tmuxOpts, windowOpts);
+  const ready = waitForReady(config.tmuxSession, state.windowName);
+  console.log(`[tmux-cc] restartSession: window=${state.windowName}, ready=${ready}, snapshotFiles=${existingFiles.size}`);
+
+  // Reset transcript state so pollForResponse re-discovers the file
+  state.transcriptPath = undefined;
+  state.transcriptOffset = 0;
+  state.existingTranscriptPaths = existingFiles;
   state.lastActivityMs = Date.now();
   return state;
 }

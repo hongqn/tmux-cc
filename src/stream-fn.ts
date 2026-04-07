@@ -92,13 +92,16 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       try {
         // Step 1: Derive a stable session key from the conversation
         const sessionKey = deriveSessionKey(context.messages, options?.sessionId);
+        console.log(`[tmux-cc] run: sessionKey=${sessionKey}, messageCount=${context.messages.length}, sessionId=${options?.sessionId ?? "none"}`);
 
         // Step 2: Extract new user message(s) from context
         const userText = extractNewUserMessages(context.messages);
         if (!userText) {
+          console.error(`[tmux-cc] no new user message found`);
           emitError(stream, "No new user message found in context");
           return;
         }
+        console.log(`[tmux-cc] userText length=${userText.length}`);
 
         // Step 3: Handle image attachments
         const processedText = processMediaContent(context.messages, config.workingDirectory);
@@ -110,10 +113,12 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 4: Get or create the Claude Code session
         const session = getOrCreateSession(sessionKey, config.defaultModel, config);
+        console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 
 
         // Step 5: Ensure Claude Code process is alive
         if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+          console.error(`[tmux-cc] process not alive in window=${session.windowName}`);
           // Session will be restarted by getOrCreateSession on next call
           emitError(stream, "Claude Code process is not running");
           return;
@@ -132,18 +137,23 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             session.transcriptPath = undefined;
           }
         }
+        console.log(`[tmux-cc] offsetBeforeSend=${offsetBeforeSend}`);
 
 
         // Step 7: Send message via tmux
+        console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         sendKeys(config.tmuxSession, session.windowName, finalText);
 
         // Step 8: Poll JSONL transcript for response
         const response = await pollForResponse(session, offsetBeforeSend, config);
 
         if (!response) {
+          console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
           emitError(stream, "Timeout waiting for Claude Code response");
           return;
         }
+        console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
+
 
 
         // Step 9: Emit the response as events
@@ -368,18 +378,29 @@ async function pollForResponse(
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
+  let pollCount = 0;
+  let lastLogTime = 0;
 
   // Small initial delay to let Claude Code start processing
   await sleep(500);
 
   while (Date.now() < deadline) {
+    pollCount++;
+
     if (!session.transcriptPath) {
       // Try to discover the transcript file
       updateTranscriptPath(session, config.workingDirectory);
       if (!session.transcriptPath) {
+        // Log discovery failures periodically (every 5s)
+        const now = Date.now();
+        if (now - lastLogTime > 5000) {
+          console.log(`[tmux-cc] poll #${pollCount}: transcript not discovered yet, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
+          lastLogTime = now;
+        }
         await sleep(config.pollingIntervalMs);
         continue;
       }
+      console.log(`[tmux-cc] poll #${pollCount}: transcript discovered: ${session.transcriptPath}, offset=${session.transcriptOffset}`);
       // Sync local offset with the offset set by updateTranscriptPath
       // (e.g., snapshot size when reconnecting to a growing file)
       currentOffset = session.transcriptOffset;
@@ -394,8 +415,10 @@ async function pollForResponse(
       // chains don't time out while Claude Code is still making progress.
       deadline = Date.now() + config.responseTimeoutMs;
 
-      const response = extractAssistantResponse(result.entries);
+      const entryTypes = result.entries.map(e => e.type).join(",");
+      console.log(`[tmux-cc] poll #${pollCount}: ${result.entries.length} new entries [${entryTypes}], offset now=${currentOffset}`);
 
+      const response = extractAssistantResponse(result.entries);
 
       // Update session ID if discovered
       if (response.sessionId && !session.claudeSessionId) {
@@ -405,6 +428,7 @@ async function pollForResponse(
       }
 
       if (response.isComplete && response.text) {
+        console.log(`[tmux-cc] poll #${pollCount}: response complete, textLen=${response.text.length}`);
         return response;
       }
 
@@ -416,6 +440,7 @@ async function pollForResponse(
       // use isWindowReady() for idle detection.
       if (!response.isComplete && response.text) {
         if (!isClaudeProcessing(config.tmuxSession, session.windowName)) {
+          console.log(`[tmux-cc] poll #${pollCount}: CC not processing, treating as complete. textLen=${response.text.length}`);
           response.isComplete = true;
           return response;
         }
@@ -425,6 +450,7 @@ async function pollForResponse(
     await sleep(config.pollingIntervalMs);
   }
 
+  console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, transcriptPath=${session.transcriptPath ?? "null"}`);
   return null;
 }
 
@@ -444,6 +470,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
     // Strategy 1: new file not in snapshot
     const newPath = findNewTranscript(workingDirectory, session.existingTranscriptPaths);
     if (newPath) {
+      console.log(`[tmux-cc] updateTranscriptPath: strategy 1 (new file) found: ${newPath}`);
       session.transcriptPath = newPath;
       session.transcriptOffset = 0;
       if (!session.claudeSessionId) {
@@ -459,6 +486,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
     // Strategy 2: existing file whose size grew since snapshot
     const growing = findGrowingTranscript(workingDirectory, session.existingTranscriptPaths);
     if (growing) {
+      console.log(`[tmux-cc] updateTranscriptPath: strategy 2 (growing file) found: ${growing.path}, snapshotSize=${growing.snapshotSize}`);
       session.transcriptPath = growing.path;
       session.transcriptOffset = growing.snapshotSize;
       if (!session.claudeSessionId) {
@@ -478,6 +506,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
   // Normal case (no snapshot): use latest file
   const path = findLatestTranscript(workingDirectory);
   if (path) {
+    console.log(`[tmux-cc] updateTranscriptPath: no snapshot, using latest: ${path}`);
     session.transcriptPath = path;
     if (!session.claudeSessionId) {
       session.claudeSessionId = extractSessionId(path);
