@@ -493,6 +493,8 @@ async function pollForResponse(
       // Activity detected REDACTED extend the deadline so long-running tool-call
       // chains don't time out while Claude Code is still making progress.
       deadline = Date.now() + config.responseTimeoutMs;
+      // Also update lastActivityMs so idle cleanup won't kill this session
+      session.lastActivityMs = Date.now();
 
       const entryTypes = result.entries.map(e => e.type).join(",");
       console.log(`[tmux-cc] poll #${pollCount}: ${result.entries.length} new entries [${entryTypes}], offset now=${currentOffset}`);

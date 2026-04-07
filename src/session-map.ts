@@ -239,7 +239,9 @@ export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
   let cleaned = 0;
 
   for (const [key, state] of sessions) {
-    if (now - state.lastActivityMs > mergedConfig.idleTimeoutMs) {
+    const idleMs = now - state.lastActivityMs;
+    if (idleMs > mergedConfig.idleTimeoutMs) {
+      console.log(`[tmux-cc] cleanupIdleSessions: killing idle session key=${key}, window=${state.windowName}, idleMs=${idleMs}`);
       killWindow(mergedConfig.tmuxSession, state.windowName);
       sessions.delete(key);
       cleaned++;
@@ -281,6 +283,7 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
   const currentWindows = listWindows(mergedConfig.tmuxSession);
   for (const winName of currentWindows) {
     if (winName.startsWith(WINDOW_PREFIX) && !trackedWindows.has(winName)) {
+      console.log(`[tmux-cc] cleanupOrphanedWindows: killing orphaned window=${winName}`);
       killWindow(mergedConfig.tmuxSession, winName);
       cleaned++;
     }
