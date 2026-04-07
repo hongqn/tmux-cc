@@ -288,24 +288,34 @@ export function parseLine(line: string): TranscriptEntry | null {
  * we rely on the turn_duration system entry to confirm completion
  * when stop_reason is absent.
  */
-export function extractAssistantResponse(entries: TranscriptEntry[]): AssistantResponse {
+export function extractAssistantResponse(
+  entries: TranscriptEntry[],
+  opts?: { collectAllText?: boolean },
+): AssistantResponse {
   // Check if a turn_duration system entry is present REDACTED this is the
   // reliable signal that Claude Code has finished the entire turn.
   const hasTurnDuration = entries.some((e) => e.type === "system" && e.subtype === "turn_duration");
 
-  // Collect thinking from ALL assistant entries in this turn (thinking often
-  // appears in earlier entries before tool calls), but only take text from
-  // the LAST assistant entry (the final answer).
+  // Collect thinking from ALL assistant entries in this turn.
+  // Normal mode: take text only from the LAST assistant entry (the final answer).
+  // collectAllText mode: take text from ALL assistant entries (for CC death recovery
+  // where the last entry might be a tool_use with no text).
   const allThinkingParts: string[] = [];
+  const allTextParts: string[] = [];
   let lastAssistantIdx = -1;
+  let lastSessionId: string | undefined;
 
   for (let i = 0; i < entries.length; i++) {
     if (entries[i].type !== "assistant") continue;
     lastAssistantIdx = i;
+    lastSessionId = entries[i].sessionId ?? lastSessionId;
 
     for (const block of entries[i].message.content) {
       if (block.type === "thinking") {
         allThinkingParts.push(block.thinking);
+      }
+      if (block.type === "text" && opts?.collectAllText) {
+        allTextParts.push(block.text);
       }
     }
   }
@@ -316,9 +326,13 @@ export function extractAssistantResponse(entries: TranscriptEntry[]): AssistantR
 
   const lastEntry = entries[lastAssistantIdx];
   const textParts: string[] = [];
-  for (const block of lastEntry.message.content) {
-    if (block.type === "text") {
-      textParts.push(block.text);
+  if (opts?.collectAllText) {
+    textParts.push(...allTextParts);
+  } else {
+    for (const block of lastEntry.message.content) {
+      if (block.type === "text") {
+        textParts.push(block.text);
+      }
     }
   }
 
@@ -332,7 +346,7 @@ export function extractAssistantResponse(entries: TranscriptEntry[]): AssistantR
     text: textParts.join("\n"),
     thinking: allThinkingParts.length > 0 ? allThinkingParts.join("\n") : undefined,
     isComplete,
-    sessionId: lastEntry.sessionId,
+    sessionId: lastSessionId,
   };
 }
 

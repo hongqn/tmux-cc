@@ -378,6 +378,12 @@ async function pollForResponse(
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
+  // Track the actual offset at which we first saw entries after the send.
+  // When transcriptPath is undefined at send time, offsetBeforeSend is 0
+  // but discovery may set a higher initial offset (e.g., snapshot size for
+  // --resume files). We capture that so CC-death re-reads only cover the
+  // current turn, not the entire file.
+  let effectiveOffsetBeforeSend = offsetBeforeSend;
   let pollCount = 0;
   let lastLogTime = 0;
 
@@ -404,6 +410,10 @@ async function pollForResponse(
       // Sync local offset with the offset set by updateTranscriptPath
       // (e.g., snapshot size when reconnecting to a growing file)
       currentOffset = session.transcriptOffset;
+      // Also update the effective offset so CC-death re-reads start here
+      if (effectiveOffsetBeforeSend === 0 && currentOffset > 0) {
+        effectiveOffsetBeforeSend = currentOffset;
+      }
     }
 
     const result = readNewEntries(session.transcriptPath, currentOffset);
@@ -450,11 +460,13 @@ async function pollForResponse(
       // process dead).  When it exits mid-turn the transcript stops
       // growing, so we'd otherwise spin here until the timeout.
       if (!isProcessAlive(config.tmuxSession, session.windowName)) {
-        console.log(`[tmux-cc] poll #${pollCount}: CC process died, re-reading full response from offset ${offsetBeforeSend}`);
+        console.log(`[tmux-cc] poll #${pollCount}: CC process died, re-reading full response from offset ${effectiveOffsetBeforeSend}`);
         // Re-read ALL entries since the message was sent to capture
         // any partial assistant text written before the exit.
-        const fullResult = readNewEntries(session.transcriptPath, offsetBeforeSend);
-        const response = extractAssistantResponse(fullResult.entries);
+        // Use collectAllText to gather text from ALL assistant entries,
+        // not just the last one (which might be a tool_use with no text).
+        const fullResult = readNewEntries(session.transcriptPath, effectiveOffsetBeforeSend);
+        const response = extractAssistantResponse(fullResult.entries, { collectAllText: true });
         if (response.text) {
           console.log(`[tmux-cc] poll #${pollCount}: CC died, returning partial response. textLen=${response.text.length}`);
           response.isComplete = true;
