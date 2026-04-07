@@ -174,7 +174,7 @@ function createNewSession(
 /**
  * Restart a crashed Claude Code session using --resume.
  */
-function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): SessionState {
+export function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): SessionState {
   // Kill the old window if it still exists
   killWindow(config.tmuxSession, state.windowName);
 

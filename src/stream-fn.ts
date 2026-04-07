@@ -17,7 +17,7 @@ import type {
   TextContent,
   UserMessage,
 } from "@mariozechner/pi-ai";
-import { getOrCreateSession } from "./session-map.js";
+import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
 import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing } from "./tmux-manager.js";
 import {
@@ -145,7 +145,29 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         sendKeys(config.tmuxSession, session.windowName, finalText);
 
         // Step 8: Poll JSONL transcript for response
-        const response = await pollForResponse(session, offsetBeforeSend, config);
+        let response = await pollForResponse(session, offsetBeforeSend, config);
+
+        // Step 8.5: If CC died with no response, restart and retry once.
+        // This prevents the gateway's CommandLane from getting permanently
+        // stuck (gateway bug: lane slot not released on embedded run error).
+        if (!response && !isProcessAlive(config.tmuxSession, session.windowName)) {
+          console.log(`[tmux-cc] CC died with no response, restarting with --resume`);
+          restartSession(session, config);
+
+          if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+            console.error(`[tmux-cc] restart failed, CC still not alive`);
+            emitError(stream, "Claude Code process died and restart failed");
+            return;
+          }
+
+          // After restart, transcriptPath is reset REDACTED re-record offset
+          offsetBeforeSend = 0;
+
+          console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
+          sendKeys(config.tmuxSession, session.windowName, finalText);
+
+          response = await pollForResponse(session, offsetBeforeSend, config);
+        }
 
         if (!response) {
           console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
@@ -158,8 +180,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 9: Emit the response as events
         const assistantMessage = buildAssistantMessage(response);
+        console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}`);
 
         stream.push({ type: "start", partial: assistantMessage });
+        console.log(`[tmux-cc] pushed: start`);
 
         // Emit thinking events first (if present)
         let contentIndex = 0;
@@ -182,6 +206,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             partial: assistantMessage,
           });
           contentIndex++;
+          console.log(`[tmux-cc] pushed: thinking events`);
         }
 
         // Emit text events
@@ -202,19 +227,57 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           content: response.text,
           partial: assistantMessage,
         });
+        console.log(`[tmux-cc] pushed: text events`);
         stream.push({
           type: "done",
           reason: "stop",
           message: assistantMessage,
         });
+        console.log(`[tmux-cc] pushed: done REDACTED all stream events emitted`);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
+        console.error(`[tmux-cc] run() error:`, err);
         emitError(stream, message);
       }
     };
 
     // Run async without blocking
-    void run();
+    run().catch((err) => {
+      console.error(`[tmux-cc] UNHANDLED run() rejection:`, err);
+    });
+
+    // Diagnostic: wrap [Symbol.asyncIterator] to log event consumption
+    const origIter = stream[Symbol.asyncIterator].bind(stream);
+    (stream as any)[Symbol.asyncIterator] = function () {
+      console.log(`[tmux-cc] DIAG: [Symbol.asyncIterator]() called REDACTED iterator created`);
+      const it = origIter();
+      let callCount = 0;
+      return {
+        async next() {
+          callCount++;
+          console.log(`[tmux-cc] DIAG: next() called #${callCount}`);
+          try {
+            const result = await it.next();
+            const eventType = result.done ? "DONE" : (result.value as any)?.type ?? "unknown";
+            console.log(`[tmux-cc] DIAG: next() resolved #${callCount}: done=${result.done}, type=${eventType}`);
+            return result;
+          } catch (err) {
+            console.error(`[tmux-cc] DIAG: next() threw #${callCount}:`, err);
+            throw err;
+          }
+        },
+        async return(v?: unknown) {
+          console.log(`[tmux-cc] DIAG: return() called`);
+          return it.return?.(v) ?? { done: true as const, value: undefined };
+        },
+        async throw(e?: unknown) {
+          console.error(`[tmux-cc] DIAG: throw() called:`, e);
+          return it.throw?.(e) ?? { done: true as const, value: undefined };
+        },
+        [Symbol.asyncIterator]() { return this; },
+      };
+    };
+
     return stream;
   };
 }
