@@ -156,7 +156,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
           if (!isProcessAlive(config.tmuxSession, session.windowName)) {
             console.error(`[tmux-cc] restart failed, CC still not alive`);
-            emitError(stream, "Claude Code process died and restart failed");
+            emitTextResponse(stream, "Claude Code process crashed and could not be restarted. Please retry.");
             return;
           }
 
@@ -170,8 +170,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         if (!response) {
-          console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-          emitError(stream, "Timeout waiting for Claude Code response");
+          const ccAlive = isProcessAlive(config.tmuxSession, session.windowName);
+          if (!ccAlive) {
+            console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
+            emitTextResponse(stream, "Claude Code process crashed. Please retry.");
+          } else {
+            console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
+            emitTextResponse(stream, "Claude Code response timed out. Please retry.");
+          }
           return;
         }
         console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
@@ -639,6 +645,27 @@ function buildAssistantMessage(response: AssistantResponse): AssistantMessage {
     stopReason: "stop",
     timestamp: Date.now(),
   };
+}
+
+/**
+ * Emit a normal text response with an error message.
+ * Unlike emitError(), this emits a regular assistant response so the gateway
+ * treats it as a successful run and releases the CommandLane slot.
+ * Use for errors that would otherwise permanently block the session lane.
+ */
+function emitTextResponse(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  message: string,
+): void {
+  const response: AssistantResponse = {
+    text: `REDACTEDÔREDACTED ${message}`,
+    isComplete: true,
+  };
+  const assistantMessage = buildAssistantMessage(response);
+  stream.push({ type: "start", partial: assistantMessage });
+  stream.push({ type: "text_start", contentIndex: 0, partial: assistantMessage });
+  stream.push({ type: "text_delta", content: response.text, partial: assistantMessage });
+  stream.push({ type: "done", reason: "stop", message: assistantMessage });
 }
 
 /**
