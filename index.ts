@@ -304,6 +304,9 @@ export default definePluginEntry({
         const workDir = pluginConfig.workingDirectory ?? ctx.workspaceDir ?? process.cwd();
         const mergedConfig = { ...DEFAULT_CONFIG, ...pluginConfig, workingDirectory: workDir };
 
+        // Set up workspace for this agent (CLAUDE.md, skills symlink, MCP settings)
+        setupWorkspace(workDir);
+
         // Extract the Claude model from the full model ID
         const claudeModelId = extractClaudeModelId(ctx.modelId);
 
