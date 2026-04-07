@@ -147,11 +147,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 8: Poll JSONL transcript for response
         let response = await pollForResponse(session, offsetBeforeSend, config);
 
-        // Step 8.5: If CC died with no response, restart and retry once.
+        // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
         // This prevents the gateway's CommandLane from getting permanently
         // stuck (gateway bug: lane slot not released on embedded run error).
         if (!response && !isProcessAlive(config.tmuxSession, session.windowName)) {
-          console.log(`[tmux-cc] CC died with no response, restarting with --resume`);
+          console.log(`[tmux-cc] CC died, restarting with --resume`);
           restartSession(session, config);
 
           if (!isProcessAlive(config.tmuxSession, session.windowName)) {
@@ -538,12 +538,17 @@ async function pollForResponse(
         // not just the last one (which might be a tool_use with no text).
         const fullResult = readNewEntries(session.transcriptPath, effectiveOffsetBeforeSend);
         const response = extractAssistantResponse(fullResult.entries, { collectAllText: true });
-        if (response.text) {
-          console.log(`[tmux-cc] poll #${pollCount}: CC died, returning partial response. textLen=${response.text.length}`);
-          response.isComplete = true;
+        if (response.text && response.isComplete) {
+          // CC completed its response (has stop_reason) then exited REDACTED valid response
+          console.log(`[tmux-cc] poll #${pollCount}: CC died after completing response. textLen=${response.text.length}`);
           return response;
         }
-        console.error(`[tmux-cc] poll #${pollCount}: CC died with no response text`);
+        if (response.text) {
+          // CC died mid-response (no stop_reason) REDACTED treat as crash, return null to trigger retry
+          console.log(`[tmux-cc] poll #${pollCount}: CC died mid-response (incomplete). textLen=${response.text.length}, discarding`);
+        } else {
+          console.error(`[tmux-cc] poll #${pollCount}: CC died with no response text`);
+        }
         return null;
       }
     }
