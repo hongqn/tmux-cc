@@ -445,6 +445,24 @@ async function pollForResponse(
           return response;
         }
       }
+    } else {
+      // No new entries REDACTED check if Claude Code exited (window gone or
+      // process dead).  When it exits mid-turn the transcript stops
+      // growing, so we'd otherwise spin here until the timeout.
+      if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+        console.log(`[tmux-cc] poll #${pollCount}: CC process died, re-reading full response from offset ${offsetBeforeSend}`);
+        // Re-read ALL entries since the message was sent to capture
+        // any partial assistant text written before the exit.
+        const fullResult = readNewEntries(session.transcriptPath, offsetBeforeSend);
+        const response = extractAssistantResponse(fullResult.entries);
+        if (response.text) {
+          console.log(`[tmux-cc] poll #${pollCount}: CC died, returning partial response. textLen=${response.text.length}`);
+          response.isComplete = true;
+          return response;
+        }
+        console.error(`[tmux-cc] poll #${pollCount}: CC died with no response text`);
+        return null;
+      }
     }
 
     await sleep(config.pollingIntervalMs);
