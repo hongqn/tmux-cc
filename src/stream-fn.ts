@@ -26,6 +26,7 @@ import {
   findLatestTranscript,
   findNewTranscript,
   findGrowingTranscript,
+  findTranscriptBySessionId,
   extractSessionId,
 } from "./transcript-reader.js";
 import type { TmuxClaudeConfig, SessionState, AssistantResponse, TranscriptEntry } from "./types.js";
@@ -715,6 +716,31 @@ async function pollForResponse(
  * skip old entries and only read new content.
  */
 function updateTranscriptPath(session: SessionState, workingDirectory: string): void {
+  // Strategy 0: when we know the claudeSessionId (resuming a persisted
+  // session), look directly for <sessionId>.jsonl.  This avoids picking
+  // up a transcript created by a *different* CC session that happens to
+  // share the same project directory.
+  if (session.claudeSessionId) {
+    const knownPath = findTranscriptBySessionId(workingDirectory, session.claudeSessionId);
+    if (knownPath) {
+      const snapshotSize = session.existingTranscriptPaths?.get(knownPath);
+      if (snapshotSize != null) {
+        // Known file that existed before REDACTED use snapshot offset to skip old entries
+        console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, growing) found: ${knownPath}, snapshotSize=${snapshotSize}`);
+        session.transcriptPath = knownPath;
+        session.transcriptOffset = snapshotSize;
+      } else {
+        // File is brand new (not in snapshot) REDACTED read from start
+        console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, new) found: ${knownPath}`);
+        session.transcriptPath = knownPath;
+        session.transcriptOffset = 0;
+      }
+      session.existingTranscriptPaths = undefined;
+      return;
+    }
+    // Session file doesn't exist yet REDACTED fall through to generic strategies
+  }
+
   if (session.existingTranscriptPaths) {
     // Strategy 1: new file not in snapshot
     const newPath = findNewTranscript(workingDirectory, session.existingTranscriptPaths);
