@@ -88,6 +88,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
   return (_model: unknown, context: Context, options?: { sessionId?: string }) => {
     const stream = createAssistantMessageEventStream();
+    // Cancellation signal REDACTED set when the consumer calls return() (e.g., /stop)
+    let cancelled = false;
+    let cancelSession: SessionState | null = null;
 
     const run = async () => {
       let streamStarted = false;
@@ -116,8 +119,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 4: Get or create the Claude Code session
         const session = await getOrCreateSession(sessionKey, config.defaultModel, config);
+        cancelSession = session;
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 
+        // Check if already cancelled before doing more work
+        if (cancelled) {
+          console.log(`[tmux-cc] cancelled before sending message`);
+          return;
+        }
 
         // Step 5: Ensure Claude Code process is alive
         if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
@@ -231,7 +240,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         };
 
         // Step 8: Poll JSONL transcript for response
-        let response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries);
+        let response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries, () => cancelled);
 
         // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
         if (!response && !(await isProcessAlive(config.tmuxSession, session.windowName))) {
@@ -250,7 +259,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           await sendKeys(config.tmuxSession, session.windowName, finalText);
 
-          response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries);
+          response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries, () => cancelled);
         }
 
         if (!response) {
@@ -354,7 +363,17 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           }
         },
         async return(v?: unknown) {
-          console.log(`[tmux-cc] DIAG: return() called`);
+          console.log(`[tmux-cc] DIAG: return() called REDACTED setting cancelled flag`);
+          cancelled = true;
+          // Interrupt CC if we have a session
+          if (cancelSession) {
+            try {
+              await sendTmuxKey(config.tmuxSession, cancelSession.windowName, "Escape");
+              console.log(`[tmux-cc] sent Escape to interrupt CC after /stop`);
+            } catch {
+              // Window may already be gone
+            }
+          }
           return it.return?.(v) ?? { done: true as const, value: undefined };
         },
         async throw(e?: unknown) {
@@ -526,6 +545,7 @@ async function pollForResponse(
   offsetBeforeSend: number,
   config: Required<TmuxClaudeConfig>,
   onNewEntries?: (allEntries: TranscriptEntry[]) => void,
+  isCancelled?: () => boolean,
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
@@ -539,6 +559,18 @@ async function pollForResponse(
 
   while (Date.now() < deadline) {
     pollCount++;
+
+    // Check cancellation (e.g. /stop command)
+    if (isCancelled?.()) {
+      console.log(`[tmux-cc] poll #${pollCount}: cancelled by consumer, interrupting CC`);
+      try {
+        await sendTmuxKey(config.tmuxSession, session.windowName, "Escape");
+      } catch {
+        // Window may already be gone
+      }
+      return null;
+    }
+
     onNewEntries?.(allEntries);
 
     if (!session.transcriptPath) {
