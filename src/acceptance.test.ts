@@ -71,7 +71,9 @@ describe("acceptance: session lifecycle", () => {
     );
     expect(newWindowCalls.length).toBeGreaterThanOrEqual(1);
     const windowCmd = newWindowCalls[0][0] as string;
-    expect(windowCmd).toContain("--dangerously-skip-permissions");
+    expect(windowCmd).toContain("--permission-mode");
+    expect(windowCmd).toContain("bypassPermissions");
+    expect(windowCmd).not.toContain("--dangerously-skip-permissions");
     expect(windowCmd).toContain("--model");
     expect(windowCmd).toContain("sonnet-4.6");
   });

@@ -58,7 +58,6 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
 
   const args = [
     opts.claudeCommand,
-    "--dangerously-skip-permissions",
     "--permission-mode",
     "bypassPermissions",
     "--model",

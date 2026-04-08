@@ -6,6 +6,7 @@ import {
   isProcessAlive,
   windowExists,
   killWindow,
+  readExitCode,
 } from "./tmux-manager.js";
 
 vi.mock("node:child_process", () => ({
@@ -69,7 +70,9 @@ describe("tmux-manager", () => {
       const cmd = newWindowCall![0] as string;
       expect(cmd).toContain("new-window");
       expect(cmd).toContain("cc-window1");
-      expect(cmd).toContain("--dangerously-skip-permissions");
+      expect(cmd).toContain("--permission-mode");
+      expect(cmd).toContain("bypassPermissions");
+      expect(cmd).not.toContain("--dangerously-skip-permissions");
       expect(cmd).toContain("sonnet-4.6");
     });
 
@@ -152,6 +155,93 @@ describe("tmux-manager", () => {
       });
 
       expect(() => killWindow("test-session", "cc-window1")).not.toThrow();
+    });
+  });
+
+  describe("createWindow regression: no shell wrapper", () => {
+    it("runs claude command directly without wrapping in bash/shell", () => {
+      execSyncMock.mockReturnValue("");
+
+      createWindow(
+        {
+          tmuxSession: "test-session",
+          claudeCommand: "claude",
+          workingDirectory: "/home/user/project",
+        },
+        {
+          windowName: "cc-window1",
+          model: "sonnet-4.6",
+        },
+      );
+
+      const newWindowCall = execSyncMock.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
+      );
+      const cmd = newWindowCall![0] as string;
+      // The command must NOT be wrapped in bash -c, sh -c, or any shell intermediary.
+      // A shell wrapper would change tmux's pane_current_command from "claude" to "bash",
+      // causing isProcessAlive() to return false even while CC is running.
+      expect(cmd).not.toMatch(/bash\s+-c/);
+      expect(cmd).not.toMatch(/sh\s+-c/);
+      expect(cmd).not.toContain("mkdir -p");
+      expect(cmd).not.toContain("echo $?");
+    });
+
+    it("sets remain-on-exit after creating window", () => {
+      execSyncMock.mockReturnValue("");
+
+      createWindow(
+        {
+          tmuxSession: "test-session",
+          claudeCommand: "claude",
+          workingDirectory: "/home/user/project",
+        },
+        {
+          windowName: "cc-window1",
+          model: "sonnet-4.6",
+        },
+      );
+
+      const setOptionCall = execSyncMock.mock.calls.find(
+        (call) =>
+          typeof call[0] === "string" && call[0].includes("remain-on-exit"),
+      );
+      expect(setOptionCall).toBeDefined();
+      expect(setOptionCall![0]).toContain("set-option");
+      expect(setOptionCall![0]).toContain("remain-on-exit");
+      expect(setOptionCall![0]).toContain("on");
+    });
+  });
+
+  describe("readExitCode", () => {
+    it("returns exit code when pane is dead", () => {
+      execSyncMock
+        .mockReturnValueOnce("1")   // pane_dead
+        .mockReturnValueOnce("134"); // pane_dead_status
+
+      expect(readExitCode("test-session", "cc-window1")).toBe(134);
+    });
+
+    it("returns 0 for empty status string (normal exit)", () => {
+      execSyncMock
+        .mockReturnValueOnce("1") // pane_dead
+        .mockReturnValueOnce("");  // pane_dead_status (empty = 0)
+
+      expect(readExitCode("test-session", "cc-window1")).toBe(0);
+    });
+
+    it("returns null when pane is still alive", () => {
+      execSyncMock.mockReturnValueOnce("0"); // pane_dead
+
+      expect(readExitCode("test-session", "cc-window1")).toBeNull();
+    });
+
+    it("returns null on error", () => {
+      execSyncMock.mockImplementation(() => {
+        throw new Error("window not found");
+      });
+
+      expect(readExitCode("test-session", "cc-window1")).toBeNull();
     });
   });
 });

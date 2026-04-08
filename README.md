@@ -115,7 +115,7 @@ Images sent via messaging channels are saved to `.openclaw-images/` in the worki
 
 ### Permission prompts blocking
 
-The plugin uses `--dangerously-skip-permissions` flag. If you see permission prompts, ensure Claude Code CLI supports this flag (requires recent version).
+The plugin uses `--permission-mode bypassPermissions` flag. If you see permission prompts, ensure Claude Code CLI supports this flag (requires recent version).
 
 ### Transcript not found
 
