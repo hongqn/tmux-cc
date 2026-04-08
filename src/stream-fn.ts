@@ -120,7 +120,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         if (!isProcessAlive(config.tmuxSession, session.windowName)) {
           console.error(`[tmux-cc] process not alive in window=${session.windowName}`);
           // Session will be restarted by getOrCreateSession on next call
-          emitError(stream, "Claude Code process is not running");
+          emitTextResponse(stream, "REDACTEDÔREDACTED Claude Code process failed to start. Please retry.");
           return;
         }
 
@@ -532,7 +532,7 @@ async function pollForResponse(
       // growing, so we'd otherwise spin here until the timeout.
       if (!isProcessAlive(config.tmuxSession, session.windowName)) {
         // Capture crash diagnostics before anything else
-        const exitCode = readExitCode(session.windowName);
+        const exitCode = readExitCode(config.tmuxSession, session.windowName);
         const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
         console.error(`[tmux-cc] poll #${pollCount}: CC process died. exitCode=${exitCode ?? "unknown"}`);
         if (paneContent) {

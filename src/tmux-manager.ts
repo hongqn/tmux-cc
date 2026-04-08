@@ -9,7 +9,6 @@ import { execSync, type ExecSyncOptionsWithStringEncoding } from "node:child_pro
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
 const READY_TIMEOUT_MS = 30_000;
-const CC_EXIT_DIR = "/tmp/cc-exit";
 
 export interface TmuxManagerOptions {
   /** Name of the tmux session to use. */
@@ -73,13 +72,17 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   const cmd = args.map(shellEscape).join(" ");
   const target = `${shellEscape(opts.tmuxSession)}`;
 
-  // Wrap command to capture exit code when CC exits
-  const exitFile = `${CC_EXIT_DIR}/${windowOpts.windowName}`;
-  const wrappedCmd = `mkdir -p ${shellEscape(CC_EXIT_DIR)} && ${cmd}; echo $? > ${shellEscape(exitFile)}`;
-
   exec(
-    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${shellEscape(wrappedCmd)}`,
+    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${shellEscape(cmd)}`,
   );
+
+  // Keep the pane alive after CC exits so we can read exit code + last output
+  const windowTarget = `${shellEscape(opts.tmuxSession)}:${shellEscape(windowOpts.windowName)}`;
+  try {
+    exec(`tmux set-option -t ${windowTarget} remain-on-exit on`);
+  } catch {
+    // Non-fatal REDACTED diagnostics just won't be available
+  }
 }
 
 /**
@@ -139,19 +142,12 @@ export function killWindow(tmuxSession: string, windowName: string): void {
   } catch {
     // Window may already be gone
   }
-  // Clean up exit code file
-  try {
-    const { unlinkSync } = require("node:fs");
-    unlinkSync(`${CC_EXIT_DIR}/${windowName}`);
-  } catch {
-    // File may not exist
-  }
 }
 
 /**
  * Capture the last N lines from a tmux pane.
  * Useful for crash diagnostics REDACTED captures error messages CC may have
- * printed before exiting.
+ * printed before exiting.  Works with remain-on-exit panes.
  */
 export function capturePane(tmuxSession: string, windowName: string, lines = 50): string {
   try {
@@ -163,14 +159,18 @@ export function capturePane(tmuxSession: string, windowName: string, lines = 50)
 }
 
 /**
- * Read the exit code of a CC process that has exited.
+ * Read the exit code of a CC process from tmux's pane_dead_status.
+ * Only works when remain-on-exit is on and the pane's process has exited.
  * Returns the exit code as a number, or null if unavailable.
  */
-export function readExitCode(windowName: string): number | null {
+export function readExitCode(tmuxSession: string, windowName: string): number | null {
   try {
-    const { readFileSync } = require("node:fs");
-    const content = readFileSync(`${CC_EXIT_DIR}/${windowName}`, "utf-8").trim();
-    const code = parseInt(content, 10);
+    const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
+    const dead = exec(`tmux display-message -t ${target} -p "#{pane_dead}"`);
+    if (dead !== "1") return null;
+    const status = exec(`tmux display-message -t ${target} -p "#{pane_dead_status}"`);
+    if (status === "") return 0;
+    const code = parseInt(status, 10);
     return isNaN(code) ? null : code;
   } catch {
     return null;
