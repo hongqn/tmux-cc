@@ -89,6 +89,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
+      let streamStarted = false;
       try {
         // Step 1: Derive a stable session key from the conversation
         const sessionKey = deriveSessionKey(context.messages, options?.sessionId);
@@ -152,8 +153,28 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           return;
         }
 
+        // Step 7.5: Emit early stream events to prevent gateway stall timeout.
+        // The gateway kills streams after ~60s of no events, but CC tool-call
+        // chains can take minutes. Emitting start/text_start now, then
+        // heartbeat text_delta events during polling, keeps the stream alive.
+        const earlyMsg = buildAssistantMessage({ text: "", isComplete: false });
+        stream.push({ type: "start", partial: earlyMsg });
+        stream.push({ type: "text_start", contentIndex: 0, partial: earlyMsg });
+        streamStarted = true;
+        let lastHeartbeatMs = Date.now();
+        const HEARTBEAT_INTERVAL_MS = 25_000;
+
+        const heartbeat = () => {
+          const now = Date.now();
+          if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+            stream.push({ type: "text_delta", contentIndex: 0, delta: "", partial: earlyMsg });
+            lastHeartbeatMs = now;
+            console.log(`[tmux-cc] heartbeat: emitted keepalive text_delta`);
+          }
+        };
+
         // Step 8: Poll JSONL transcript for response
-        let response = await pollForResponse(session, offsetBeforeSend, config);
+        let response = await pollForResponse(session, offsetBeforeSend, config, heartbeat);
 
         // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
         // This prevents the gateway's CommandLane from getting permanently
@@ -164,7 +185,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
           if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
             console.error(`[tmux-cc] restart failed, CC still not alive`);
-            emitTextResponse(stream, "Claude Code process crashed and could not be restarted. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed and could not be restarted. Please retry.");
             return;
           }
 
@@ -174,72 +195,45 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           await sendKeys(config.tmuxSession, session.windowName, finalText);
 
-          response = await pollForResponse(session, offsetBeforeSend, config);
+          response = await pollForResponse(session, offsetBeforeSend, config, heartbeat);
         }
 
         if (!response) {
           const ccAlive = await isProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
             console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitTextResponse(stream, "Claude Code process crashed. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed. Please retry.");
             await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitTextResponse(stream, "Claude Code response timed out. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code response timed out. Please retry.");
           }
           return;
         }
         console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
 
-
-
-        // Step 9: Emit the response as events
+        // Step 9: Emit the response as stream close events.
+        // start + text_start were already emitted in Step 7.5.
         const assistantMessage = buildAssistantMessage(response);
         console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}`);
 
-        stream.push({ type: "start", partial: assistantMessage });
-        console.log(`[tmux-cc] pushed: start`);
-
-        // Emit thinking events first (if present)
-        let contentIndex = 0;
+        // Combine thinking into text if present (thinking events can't precede
+        // text_start which was already emitted).
+        let fullText = response.text;
         if (response.thinking) {
-          stream.push({
-            type: "thinking_start",
-            contentIndex,
-            partial: assistantMessage,
-          });
-          stream.push({
-            type: "thinking_delta",
-            contentIndex,
-            delta: response.thinking,
-            partial: assistantMessage,
-          });
-          stream.push({
-            type: "thinking_end",
-            contentIndex,
-            content: response.thinking,
-            partial: assistantMessage,
-          });
-          contentIndex++;
-          console.log(`[tmux-cc] pushed: thinking events`);
+          fullText = `<thinking>\n${response.thinking}\n</thinking>\n\n${response.text}`;
         }
 
-        // Emit text events
-        stream.push({
-          type: "text_start",
-          contentIndex,
-          partial: assistantMessage,
-        });
         stream.push({
           type: "text_delta",
-          contentIndex,
-          delta: response.text,
+          contentIndex: 0,
+          delta: fullText,
           partial: assistantMessage,
         });
         stream.push({
           type: "text_end",
-          contentIndex,
-          content: response.text,
+          contentIndex: 0,
+          content: fullText,
           partial: assistantMessage,
         });
         console.log(`[tmux-cc] pushed: text events`);
@@ -252,7 +246,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         console.error(`[tmux-cc] run() error:`, err);
-        emitError(stream, message);
+        if (streamStarted) {
+          emitStreamClose(stream, `REDACTEDÔREDACTED ${message}`);
+        } else {
+          emitError(stream, message);
+        }
       }
     };
 
@@ -453,6 +451,7 @@ async function pollForResponse(
   session: SessionState,
   offsetBeforeSend: number,
   config: Required<TmuxClaudeConfig>,
+  heartbeat?: () => void,
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
@@ -470,6 +469,7 @@ async function pollForResponse(
 
   while (Date.now() < deadline) {
     pollCount++;
+    heartbeat?.();
 
     if (!session.transcriptPath) {
       // Try to discover the transcript file
@@ -728,6 +728,20 @@ function emitTextResponse(
   stream.push({ type: "start", partial: assistantMessage });
   stream.push({ type: "text_start", contentIndex: 0, partial: assistantMessage });
   stream.push({ type: "text_delta", content: response.text, partial: assistantMessage });
+  stream.push({ type: "done", reason: "stop", message: assistantMessage });
+}
+
+/**
+ * Close a stream that already had `start` + `text_start` emitted.
+ * Used for error paths after early stream emission in Step 7.5.
+ */
+function emitStreamClose(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  message: string,
+): void {
+  const assistantMessage = buildAssistantMessage({ text: message, isComplete: true });
+  stream.push({ type: "text_delta", contentIndex: 0, delta: message, partial: assistantMessage });
+  stream.push({ type: "text_end", contentIndex: 0, content: message, partial: assistantMessage });
   stream.push({ type: "done", reason: "stop", message: assistantMessage });
 }
 
