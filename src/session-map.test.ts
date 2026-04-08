@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { windowNameFromSessionKey, cleanupOrphanedWindows } from "./session-map.js";
+import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSession } from "./session-map.js";
 import * as tmuxManager from "./tmux-manager.js";
 
 vi.mock("./tmux-manager.js", () => ({
@@ -43,6 +43,19 @@ describe("session-map", () => {
   });
 
   describe("cleanupOrphanedWindows", () => {
+    beforeEach(() => {
+      _setHasEverCreatedSession(true);
+    });
+
+    it("skips cleanup when no session has ever been created", () => {
+      _setHasEverCreatedSession(false);
+      vi.mocked(tmuxManager.listWindows).mockReturnValue(["bash", "cc-orphan"]);
+
+      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      expect(cleaned).toBe(0);
+      expect(tmuxManager.killWindow).not.toHaveBeenCalled();
+    });
+
     it("kills orphaned cc-* windows not tracked in sessions Map", () => {
       vi.mocked(tmuxManager.listWindows).mockImplementation((session: string) => {
         if (session === "openclaw-cc") {

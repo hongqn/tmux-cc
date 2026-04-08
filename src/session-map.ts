@@ -25,12 +25,27 @@ import {
  */
 import type { SessionState, TmuxClaudeConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
+import { randomBytes } from "node:crypto";
+
+/** Unique ID for this module instance REDACTED detects multiple module loads. */
+const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
+console.log(`[tmux-cc] module instance ${MODULE_INSTANCE_ID} loaded`);
 
 /** In-memory map of session key REDACTED session state. */
 const sessions = new Map<string, SessionState>();
 
 /** Handle for the idle cleanup interval timer. */
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Whether this module instance has ever created a session.
+ *  Used to guard orphan cleanup REDACTED a process that never creates sessions
+ *  (e.g., openclaw-agent) must not kill windows it doesn't own. */
+let hasEverCreatedSession = false;
+
+/** @internal Test-only: set the hasEverCreatedSession flag. */
+export function _setHasEverCreatedSession(value: boolean): void {
+  hasEverCreatedSession = value;
+}
 
 /**
  * Generate a tmux window name from an OpenClaw session key.
@@ -116,6 +131,7 @@ function createNewSession(
     };
 
     sessions.set(sessionKey, state);
+    hasEverCreatedSession = true;
     return state;
   }
 
@@ -168,6 +184,7 @@ function createNewSession(
   };
 
   sessions.set(sessionKey, state);
+  hasEverCreatedSession = true;
   return state;
 }
 
@@ -241,7 +258,7 @@ export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
   for (const [key, state] of sessions) {
     const idleMs = now - state.lastActivityMs;
     if (idleMs > mergedConfig.idleTimeoutMs) {
-      console.log(`[tmux-cc] cleanupIdleSessions: killing idle session key=${key}, window=${state.windowName}, idleMs=${idleMs}`);
+      console.log(`[tmux-cc] cleanupIdleSessions: inst=${MODULE_INSTANCE_ID} killing idle session key=${key}, window=${state.windowName}, idleMs=${idleMs}`);
       killWindow(mergedConfig.tmuxSession, state.windowName);
       sessions.delete(key);
       cleaned++;
@@ -273,6 +290,14 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   let cleaned = 0;
 
+  // Guard: only clean up orphans if this process has actively created sessions.
+  // Other processes (e.g., openclaw-agent) load this module but never create
+  // sessions REDACTED their empty sessions map would wrongly flag ALL windows as orphans.
+  if (!hasEverCreatedSession) {
+    console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID} skipping REDACTED no sessions ever created in this process`);
+    return 0;
+  }
+
   // Collect all window names currently tracked in the sessions Map
   const trackedWindows = new Set<string>();
   for (const state of sessions.values()) {
@@ -281,9 +306,10 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
 
   // Scan the current tmux session for orphaned windows
   const currentWindows = listWindows(mergedConfig.tmuxSession);
+  console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID}, tracked=[${[...trackedWindows].join(",")}], current=[${currentWindows.join(",")}]`);
   for (const winName of currentWindows) {
     if (winName.startsWith(WINDOW_PREFIX) && !trackedWindows.has(winName)) {
-      console.log(`[tmux-cc] cleanupOrphanedWindows: killing orphaned window=${winName}`);
+      console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID} killing orphaned window=${winName}`);
       killWindow(mergedConfig.tmuxSession, winName);
       cleaned++;
     }
@@ -320,8 +346,12 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
  * left behind by previous gateway runs.
  */
 export function startCleanupTimer(config: TmuxClaudeConfig = {}): void {
-  if (cleanupTimer) return;
+  if (cleanupTimer) {
+    console.log(`[tmux-cc] startCleanupTimer: inst=${MODULE_INSTANCE_ID} already running, skipping`);
+    return;
+  }
 
+  console.log(`[tmux-cc] startCleanupTimer: inst=${MODULE_INSTANCE_ID} starting timer`);
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
   // Run immediate orphan cleanup on startup
@@ -331,6 +361,7 @@ export function startCleanupTimer(config: TmuxClaudeConfig = {}): void {
   const intervalMs = Math.min(mergedConfig.idleTimeoutMs / 6, 5 * 60 * 1000);
 
   cleanupTimer = setInterval(() => {
+    console.log(`[tmux-cc] cleanupInterval: inst=${MODULE_INSTANCE_ID} firing`);
     cleanupIdleSessions(mergedConfig);
   }, intervalMs);
 
