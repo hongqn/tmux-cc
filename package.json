@@ -16,6 +16,8 @@
     ]
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.63.1"
+    "@mariozechner/pi-ai": "^0.63.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
   }
 }
