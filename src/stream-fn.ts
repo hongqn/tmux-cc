@@ -158,14 +158,17 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // The gateway kills streams after ~60s of no events, but CC tool-call
         // chains can take minutes. We emit `start` now, then stream thinking
         // and tool-call progress during polling via `onNewEntries` callback.
-        const earlyMsg = buildAssistantMessage({ text: "", isComplete: false });
+        const earlyMsg = buildAssistantMessage({ text: "", isComplete: false }, session.model);
         stream.push({ type: "start", partial: earlyMsg });
         streamStarted = true;
 
-        // Streaming state REDACTED tracked across polls to emit incremental events
+        // Streaming state REDACTED tracked across polls to emit incremental events.
+        // Accumulates thinking parts so the final AssistantMessage has the
+        // full thinking content from all polls (not just the last batch).
         let lastProcessedEntryIdx = 0;
         let lastStreamEventMs = Date.now();
         const HEARTBEAT_INTERVAL_MS = 25_000;
+        const accumulatedThinking: string[] = [];
 
         const onNewEntries = (allEntries: TranscriptEntry[]) => {
           // Process only entries we haven't seen yet
@@ -180,6 +183,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                   thinkingStartEmitted = true;
                 }
                 stream.push({ type: "thinking_delta", contentIndex: 0, delta: block.thinking, partial: earlyMsg });
+                accumulatedThinking.push(block.thinking);
                 lastStreamEventMs = Date.now();
               }
               if (block.type === "tool_use") {
@@ -188,11 +192,24 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                   thinkingStartEmitted = true;
                 }
                 const inputStr = JSON.stringify(block.input).slice(0, 200);
+                const toolInfo = `\nðREDACTED ${block.name}: ${inputStr}\n`;
                 stream.push({
                   type: "thinking_delta", contentIndex: 0,
-                  delta: `\nðREDACTED ${block.name}: ${inputStr}\n`,
+                  delta: toolInfo,
                   partial: earlyMsg,
                 });
+                accumulatedThinking.push(toolInfo);
+                lastStreamEventMs = Date.now();
+              }
+              // Stream intermediate text from assistant entries (CC's commentary
+              // between tool calls) as thinking, so users see the full process.
+              if (block.type === "text" && block.text) {
+                if (!thinkingStartEmitted) {
+                  stream.push({ type: "thinking_start", contentIndex: 0, partial: earlyMsg });
+                  thinkingStartEmitted = true;
+                }
+                stream.push({ type: "thinking_delta", contentIndex: 0, delta: block.text, partial: earlyMsg });
+                accumulatedThinking.push(block.text);
                 lastStreamEventMs = Date.now();
               }
             }
@@ -222,7 +239,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
           if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
             console.error(`[tmux-cc] restart failed, CC still not alive`);
-            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code process crashed and could not be restarted. Please retry.", thinkingStartEmitted);
+            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code process crashed and could not be restarted. Please retry.", thinkingStartEmitted, session.model);
             return;
           }
 
@@ -239,25 +256,37 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           const ccAlive = await isProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
             console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code process crashed. Please retry.", thinkingStartEmitted);
+            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code process crashed. Please retry.", thinkingStartEmitted, session.model);
             await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code response timed out. Please retry.", thinkingStartEmitted);
+            emitStreamClose(stream, "REDACTEDïREDACTED Claude Code response timed out. Please retry.", thinkingStartEmitted, session.model);
           }
           return;
         }
         console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
 
-        // Step 9: Emit the response as stream close events.
+        // Step 9: Emit the response as structured stream close events.
         // `start` was emitted in Step 7.5. Thinking events may have been
         // emitted during polling via `onNewEntries`.
-        const assistantMessage = buildAssistantMessage(response);
-        console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}`);
+        // Build the final AssistantMessage with accumulated thinking from
+        // ALL polls (not just the last batch) and the actual model name.
+        const fullThinking = accumulatedThinking.length > 0
+          ? accumulatedThinking.join("\n") : response.thinking;
+        const enrichedResponse: AssistantResponse = {
+          ...response,
+          thinking: fullThinking,
+        };
+        const assistantMessage = buildAssistantMessage(enrichedResponse, session.model);
+        console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}, model=${session.model}`);
 
         // Close thinking if it was opened during polling
         if (thinkingStartEmitted) {
-          stream.push({ type: "thinking_end", contentIndex: 0, content: "", partial: assistantMessage });
+          stream.push({
+            type: "thinking_end", contentIndex: 0,
+            content: fullThinking ?? "",
+            partial: assistantMessage,
+          });
           console.log(`[tmux-cc] pushed: thinking_end`);
         }
 
@@ -726,7 +755,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
  * Build an AssistantMessage from response.
  * Includes thinking content when present.
  */
-function buildAssistantMessage(response: AssistantResponse): AssistantMessage {
+function buildAssistantMessage(response: AssistantResponse, model?: string): AssistantMessage {
   const content: AssistantMessage["content"] = [];
 
   if (response.thinking) {
@@ -739,7 +768,7 @@ function buildAssistantMessage(response: AssistantResponse): AssistantMessage {
     content,
     api: "anthropic-v1",
     provider: "tmux-cc",
-    model: "claude-code",
+    model: model ?? "claude-code",
     usage: {
       input: 0,
       output: 0,
@@ -782,8 +811,9 @@ function emitStreamClose(
   stream: ReturnType<typeof createAssistantMessageEventStream>,
   message: string,
   thinkingStarted: boolean,
+  model?: string,
 ): void {
-  const assistantMessage = buildAssistantMessage({ text: message, isComplete: true });
+  const assistantMessage = buildAssistantMessage({ text: message, isComplete: true }, model);
   if (thinkingStarted) {
     stream.push({ type: "thinking_end", contentIndex: 0, content: "", partial: assistantMessage });
   }
