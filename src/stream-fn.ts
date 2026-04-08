@@ -507,6 +507,10 @@ async function pollForResponse(
             } else if (content?.includes("I trust this folder")) {
               console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
               sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            } else if (content?.includes("[Pasted text #")) {
+              // CC received the paste but hasn't started processing (v2.1.96+)
+              console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
+              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
             }
           } catch {
             // Ignore errors from prompt check
