@@ -111,8 +111,12 @@ export function sendKeys(tmuxSession: string, windowName: string, text: string):
 export function isProcessAlive(tmuxSession: string, windowName: string): boolean {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const cmd = exec(`tmux display-message -t ${target} -p "#{pane_current_command}"`);
-    return cmd.toLowerCase().includes("claude");
+    const info = exec(`tmux display-message -t ${target} -p "#{pane_current_command} #{pane_dead}"`);
+    // With remain-on-exit, pane_current_command still shows "claude" even
+    // after the process exits.  Check pane_dead to avoid false positives.
+    const dead = info.endsWith(" 1");
+    if (dead) return false;
+    return info.toLowerCase().includes("claude");
   } catch {
     return false;
   }

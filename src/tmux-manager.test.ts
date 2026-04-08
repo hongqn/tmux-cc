@@ -102,14 +102,20 @@ describe("tmux-manager", () => {
   });
 
   describe("isProcessAlive", () => {
-    it("returns true when pane command contains claude", () => {
-      execSyncMock.mockReturnValue("claude");
+    it("returns true when pane command contains claude and pane is alive", () => {
+      execSyncMock.mockReturnValue("claude 0");
 
       expect(isProcessAlive("test-session", "cc-window1")).toBe(true);
     });
 
     it("returns false when pane command is something else", () => {
-      execSyncMock.mockReturnValue("bash");
+      execSyncMock.mockReturnValue("bash 0");
+
+      expect(isProcessAlive("test-session", "cc-window1")).toBe(false);
+    });
+
+    it("returns false when pane is dead even if command is claude (remain-on-exit)", () => {
+      execSyncMock.mockReturnValue("claude 1");
 
       expect(isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
