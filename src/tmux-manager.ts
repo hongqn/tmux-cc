@@ -126,7 +126,8 @@ export function isProcessAlive(tmuxSession: string, windowName: string): boolean
     const dead = info.endsWith(" 1");
     if (dead) return false;
     return info.toLowerCase().includes("claude");
-  } catch {
+  } catch (e) {
+    console.log(`[tmux-cc] isProcessAlive: error for window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return false;
   }
 }
@@ -179,12 +180,17 @@ export function readExitCode(tmuxSession: string, windowName: string): number | 
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
     const dead = exec(`tmux display-message -t ${target} -p "#{pane_dead}"`);
-    if (dead !== "1") return null;
+    if (dead !== "1") {
+      console.log(`[tmux-cc] readExitCode: pane_dead=${dead} (not dead), window=${windowName}`);
+      return null;
+    }
     const status = exec(`tmux display-message -t ${target} -p "#{pane_dead_status}"`);
+    console.log(`[tmux-cc] readExitCode: pane_dead=1, pane_dead_status="${status}", window=${windowName}`);
     if (status === "") return 0;
     const code = parseInt(status, 10);
     return isNaN(code) ? null : code;
-  } catch {
+  } catch (e) {
+    console.log(`[tmux-cc] readExitCode: error accessing window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return null;
   }
 }
