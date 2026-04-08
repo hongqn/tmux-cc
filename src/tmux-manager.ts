@@ -9,6 +9,7 @@ import { execSync, type ExecSyncOptionsWithStringEncoding } from "node:child_pro
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
 const READY_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_HEAP_MB = 1024;
 
 export interface TmuxManagerOptions {
   /** Name of the tmux session to use. */
@@ -17,6 +18,8 @@ export interface TmuxManagerOptions {
   claudeCommand: string;
   /** Working directory for Claude Code sessions. */
   workingDirectory: string;
+  /** V8 max old-space heap size in MB (default: 1024). */
+  maxHeapMB?: number;
 }
 
 export interface CreateWindowOptions {
@@ -71,8 +74,14 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   const cmd = args.map(shellEscape).join(" ");
   const target = `${shellEscape(opts.tmuxSession)}`;
 
+  // Limit V8 heap to prevent OOM crashes when multiple CC processes run
+  // concurrently on low-memory servers.  The -e flag sets an env var for
+  // this window only (no shell wrapper needed).
+  const heapLimit = opts.maxHeapMB ?? DEFAULT_MAX_HEAP_MB;
+  const envFlag = `-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`;
+
   exec(
-    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${shellEscape(cmd)}`,
+    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${envFlag} ${shellEscape(cmd)}`,
   );
 
   // Keep the pane alive after CC exits so we can read exit code + last output

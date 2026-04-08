@@ -193,6 +193,29 @@ describe("tmux-manager", () => {
       expect(cmd).not.toContain("echo $?");
     });
 
+    it("sets NODE_OPTIONS env var to limit V8 heap", () => {
+      execSyncMock.mockReturnValue("");
+
+      createWindow(
+        {
+          tmuxSession: "test-session",
+          claudeCommand: "claude",
+          workingDirectory: "/home/user/project",
+        },
+        {
+          windowName: "cc-window1",
+          model: "sonnet-4.6",
+        },
+      );
+
+      const newWindowCall = execSyncMock.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
+      );
+      const cmd = newWindowCall![0] as string;
+      expect(cmd).toContain("-e");
+      expect(cmd).toContain("NODE_OPTIONS=--max-old-space-size=1024");
+    });
+
     it("sets remain-on-exit after creating window", () => {
       execSyncMock.mockReturnValue("");
 
