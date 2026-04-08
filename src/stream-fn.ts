@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, sendTmuxKey, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow } from "./tmux-manager.js";
+import { sendKeys, sendTmuxKey, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow, readCrashLog, cleanupCrashLog } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -485,9 +485,13 @@ async function pollForResponse(
           if (!isProcessAlive(config.tmuxSession, session.windowName)) {
             const exitCode = readExitCode(config.tmuxSession, session.windowName);
             const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
+            const crashLog = readCrashLog(session.windowName, 50);
             console.error(`[tmux-cc] poll #${pollCount}: CC died before transcript. exitCode=${exitCode ?? "unknown"}`);
             if (paneContent) {
               console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+            }
+            if (crashLog && !paneContent) {
+              console.error(`[tmux-cc] CC crash log (last 50 lines):\n${crashLog}`);
             }
             return null;
           }
@@ -570,9 +574,13 @@ async function pollForResponse(
         // Capture crash diagnostics before anything else
         const exitCode = readExitCode(config.tmuxSession, session.windowName);
         const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
+        const crashLog = readCrashLog(session.windowName, 50);
         console.error(`[tmux-cc] poll #${pollCount}: CC process died. exitCode=${exitCode ?? "unknown"}`);
         if (paneContent) {
           console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+        }
+        if (crashLog && !paneContent) {
+          console.error(`[tmux-cc] CC crash log (last 50 lines):\n${crashLog}`);
         }
 
         console.log(`[tmux-cc] re-reading full response from offset ${effectiveOffsetBeforeSend}`);

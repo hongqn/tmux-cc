@@ -82,6 +82,15 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   } catch {
     // Non-fatal REDACTED diagnostics just won't be available
   }
+
+  // Pipe pane output to a log file for crash diagnostics.
+  // This captures stdout+stderr even if the tmux window disappears.
+  try {
+    const logFile = `/tmp/cc-${windowOpts.windowName}.log`;
+    exec(`tmux pipe-pane -t ${windowTarget} -o 'cat >> ${shellEscape(logFile)}'`);
+  } catch {
+    // Non-fatal
+  }
 }
 
 /**
@@ -192,6 +201,30 @@ export function readExitCode(tmuxSession: string, windowName: string): number | 
   } catch (e) {
     console.log(`[tmux-cc] readExitCode: error accessing window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return null;
+  }
+}
+
+/**
+ * Read the crash log captured by pipe-pane.
+ * Returns the last N lines from the log file, or empty string if unavailable.
+ */
+export function readCrashLog(windowName: string, lines = 50): string {
+  try {
+    const logFile = `/tmp/cc-${windowName}.log`;
+    return exec(`tail -n ${lines} ${shellEscape(logFile)} 2>/dev/null`);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Clean up the crash log file for a window.
+ */
+export function cleanupCrashLog(windowName: string): void {
+  try {
+    exec(`rm -f /tmp/cc-${shellEscape(windowName)}.log`);
+  } catch {
+    // Ignore
   }
 }
 
