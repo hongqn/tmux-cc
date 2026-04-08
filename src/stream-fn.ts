@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode } from "./tmux-manager.js";
+import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -142,7 +142,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 7: Send message via tmux
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
-        sendKeys(config.tmuxSession, session.windowName, finalText);
+        try {
+          sendKeys(config.tmuxSession, session.windowName, finalText);
+        } catch (e) {
+          // Window may have been killed between isProcessAlive check and sendKeys
+          console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
+          emitTextResponse(stream, "REDACTEDÔREDACTED Claude Code session is unavailable. Please retry.");
+          killWindow(config.tmuxSession, session.windowName);
+          return;
+        }
 
         // Step 8: Poll JSONL transcript for response
         let response = await pollForResponse(session, offsetBeforeSend, config);
@@ -174,6 +182,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           if (!ccAlive) {
             console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
             emitTextResponse(stream, "Claude Code process crashed. Please retry.");
+            killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
             emitTextResponse(stream, "Claude Code response timed out. Please retry.");
