@@ -48,8 +48,8 @@ describe("acceptance: session lifecycle", () => {
       if (cmd.includes("has-session")) return "";
       if (cmd.includes("select-window")) throw new Error("window not found");
       if (cmd.includes("new-window")) return "";
-      if (cmd.includes("display-message") && cmd.includes("pane_current_command")) {
-        return "claude";
+      if (cmd.includes("list-panes") && cmd.includes("pane_current_command")) {
+        return "claude 0";
       }
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
@@ -87,7 +87,7 @@ describe("acceptance: session lifecycle", () => {
         if (selectWindowCallCount === 1) throw new Error("window not found");
         return "";
       }
-      if (cmd.includes("pane_current_command")) return "claude";
+      if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
     });
@@ -124,13 +124,13 @@ describe("acceptance: session lifecycle", () => {
         aliveCheckCount++;
         if (!sessionCreated) {
           // During first getOrCreateSession: process is alive
-          return "claude";
+          return "claude 0";
         }
         // During second getOrCreateSession:
         // First check (isProcessAlive inside getOrCreateSession) REDACTED dead
         // Subsequent checks (waitForReady after restart) REDACTED alive
         if (aliveCheckCount === 1) return "bash";
-        return "claude";
+        return "claude 0";
       }
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
@@ -175,7 +175,7 @@ describe("acceptance: session lifecycle", () => {
 
   it("cleans up idle sessions after timeout", () => {
     execSyncMock.mockImplementation((cmd: string) => {
-      if (cmd.includes("pane_current_command")) return "claude";
+      if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
     });
@@ -364,7 +364,7 @@ describe("acceptance: model selection", () => {
     vi.clearAllMocks();
     execSyncMock.mockImplementation((cmd: string) => {
       if (cmd.includes("select-window")) throw new Error("window not found");
-      if (cmd.includes("pane_current_command")) return "claude";
+      if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
     });

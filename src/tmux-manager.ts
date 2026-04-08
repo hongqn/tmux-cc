@@ -125,18 +125,20 @@ export function sendTmuxKey(tmuxSession: string, windowName: string, key: string
 /**
  * Check if Claude Code process is alive in the given tmux window.
  * Returns true if the pane's current command contains "claude".
+ * Uses list-panes instead of display-message to avoid silent fallback
+ * to the default window when the target window doesn't exist.
  */
 export function isProcessAlive(tmuxSession: string, windowName: string): boolean {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const info = exec(`tmux display-message -t ${target} -p "#{pane_current_command} #{pane_dead}"`);
+    const info = exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
     // With remain-on-exit, pane_current_command still shows "claude" even
     // after the process exits.  Check pane_dead to avoid false positives.
     const dead = info.endsWith(" 1");
     if (dead) return false;
     return info.toLowerCase().includes("claude");
   } catch (e) {
-    console.log(`[tmux-cc] isProcessAlive: error for window=${windowName}: ${e instanceof Error ? e.message : e}`);
+    console.log(`[tmux-cc] isProcessAlive: window gone, window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return false;
   }
 }
@@ -188,18 +190,22 @@ export function capturePane(tmuxSession: string, windowName: string, lines = 50)
 export function readExitCode(tmuxSession: string, windowName: string): number | null {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const dead = exec(`tmux display-message -t ${target} -p "#{pane_dead}"`);
+    // Use list-panes instead of display-message to avoid silent fallback
+    // to the default window when the target window doesn't exist.
+    const info = exec(`tmux list-panes -t ${target} -F "#{pane_dead} #{pane_dead_status}"`);
+    const parts = info.split(" ");
+    const dead = parts[0];
     if (dead !== "1") {
       console.log(`[tmux-cc] readExitCode: pane_dead=${dead} (not dead), window=${windowName}`);
       return null;
     }
-    const status = exec(`tmux display-message -t ${target} -p "#{pane_dead_status}"`);
+    const status = parts.slice(1).join(" ").trim();
     console.log(`[tmux-cc] readExitCode: pane_dead=1, pane_dead_status="${status}", window=${windowName}`);
     if (status === "") return 0;
     const code = parseInt(status, 10);
     return isNaN(code) ? null : code;
   } catch (e) {
-    console.log(`[tmux-cc] readExitCode: error accessing window=${windowName}: ${e instanceof Error ? e.message : e}`);
+    console.log(`[tmux-cc] readExitCode: window gone, window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return null;
   }
 }

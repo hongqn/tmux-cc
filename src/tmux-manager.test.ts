@@ -221,23 +221,19 @@ describe("tmux-manager", () => {
 
   describe("readExitCode", () => {
     it("returns exit code when pane is dead", () => {
-      execSyncMock
-        .mockReturnValueOnce("1")   // pane_dead
-        .mockReturnValueOnce("134"); // pane_dead_status
+      execSyncMock.mockReturnValueOnce("1 134"); // pane_dead + pane_dead_status
 
       expect(readExitCode("test-session", "cc-window1")).toBe(134);
     });
 
     it("returns 0 for empty status string (normal exit)", () => {
-      execSyncMock
-        .mockReturnValueOnce("1") // pane_dead
-        .mockReturnValueOnce("");  // pane_dead_status (empty = 0)
+      execSyncMock.mockReturnValueOnce("1 "); // pane_dead + empty status
 
       expect(readExitCode("test-session", "cc-window1")).toBe(0);
     });
 
     it("returns null when pane is still alive", () => {
-      execSyncMock.mockReturnValueOnce("0"); // pane_dead
+      execSyncMock.mockReturnValueOnce("0 "); // pane_dead=0
 
       expect(readExitCode("test-session", "cc-window1")).toBeNull();
     });
