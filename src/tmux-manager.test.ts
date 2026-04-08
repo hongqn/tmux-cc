@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   ensureTmuxSession,
@@ -9,48 +8,66 @@ import {
   readExitCode,
 } from "./tmux-manager.js";
 
+// Mock exec from child_process (used via promisify).
+// Use callback-based error signaling (not throws) to work correctly with promisify.
+const execMock = vi.hoisted(() => vi.fn<any[], any>());
+
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
+  exec: execMock,
 }));
 
-const execSyncMock = vi.mocked(execSync);
+// Helpers for setting mock exec behavior
+function mockSuccess(stdout = "") {
+  return (_cmd: string, _opts: any, callback?: Function) => {
+    const cb = typeof _opts === "function" ? _opts : callback;
+    if (cb) cb(null, { stdout, stderr: "" });
+    return {};
+  };
+}
+
+function mockError(msg: string) {
+  return (_cmd: string, _opts: any, callback?: Function) => {
+    const cb = typeof _opts === "function" ? _opts : callback;
+    if (cb) cb(new Error(msg));
+    return {};
+  };
+}
+
+// Helper to check what command was passed (only first arg)
+function getCmds(): string[] {
+  return execMock.mock.calls.map((call: any[]) => call[0] as string);
+}
 
 describe("tmux-manager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    execMock.mockImplementation(mockSuccess(""));
   });
 
   describe("ensureTmuxSession", () => {
-    it("does nothing if session already exists", () => {
-      execSyncMock.mockReturnValue("");
+    it("does nothing if session already exists", async () => {
+      await ensureTmuxSession("test-session");
 
-      ensureTmuxSession("test-session");
-
-      // Only has-session should be called
-      expect(execSyncMock).toHaveBeenCalledTimes(1);
-      expect(execSyncMock.mock.calls[0][0]).toContain("has-session");
+      expect(execMock).toHaveBeenCalledTimes(1);
+      expect(getCmds()[0]).toContain("has-session");
     });
 
-    it("creates session if it does not exist", () => {
-      execSyncMock
-        .mockImplementationOnce(() => {
-          throw new Error("no session");
-        })
-        .mockReturnValue("");
+    it("creates session if it does not exist", async () => {
+      execMock
+        .mockImplementationOnce(mockError("no session"))
+        .mockImplementation(mockSuccess(""));
 
-      ensureTmuxSession("test-session");
+      await ensureTmuxSession("test-session");
 
-      expect(execSyncMock).toHaveBeenCalledTimes(2);
-      expect(execSyncMock.mock.calls[1][0]).toContain("new-session");
-      expect(execSyncMock.mock.calls[1][0]).toContain("test-session");
+      expect(execMock).toHaveBeenCalledTimes(2);
+      expect(getCmds()[1]).toContain("new-session");
+      expect(getCmds()[1]).toContain("test-session");
     });
   });
 
   describe("createWindow", () => {
-    it("creates a tmux window with claude command", () => {
-      execSyncMock.mockReturnValue("");
-
-      createWindow(
+    it("creates a tmux window with claude command", async () => {
+      await createWindow(
         {
           tmuxSession: "test-session",
           claudeCommand: "claude",
@@ -62,24 +79,18 @@ describe("tmux-manager", () => {
         },
       );
 
-      // Should call has-session (or new-session) + new-window
-      const newWindowCall = execSyncMock.mock.calls.find(
-        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
-      );
-      expect(newWindowCall).toBeDefined();
-      const cmd = newWindowCall![0] as string;
-      expect(cmd).toContain("new-window");
-      expect(cmd).toContain("cc-window1");
-      expect(cmd).toContain("--permission-mode");
-      expect(cmd).toContain("bypassPermissions");
-      expect(cmd).not.toContain("--dangerously-skip-permissions");
-      expect(cmd).toContain("sonnet-4.6");
+      const cmds = getCmds();
+      const newWindowCmd = cmds.find((c) => c.includes("new-window"));
+      expect(newWindowCmd).toBeDefined();
+      expect(newWindowCmd).toContain("cc-window1");
+      expect(newWindowCmd).toContain("--permission-mode");
+      expect(newWindowCmd).toContain("bypassPermissions");
+      expect(newWindowCmd).not.toContain("--dangerously-skip-permissions");
+      expect(newWindowCmd).toContain("sonnet-4.6");
     });
 
-    it("adds --resume flag when resumeSessionId is provided", () => {
-      execSyncMock.mockReturnValue("");
-
-      createWindow(
+    it("adds --resume flag when resumeSessionId is provided", async () => {
+      await createWindow(
         {
           tmuxSession: "test-session",
           claudeCommand: "claude",
@@ -92,83 +103,65 @@ describe("tmux-manager", () => {
         },
       );
 
-      const newWindowCall = execSyncMock.mock.calls.find(
-        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
-      );
-      const cmd = newWindowCall![0] as string;
-      expect(cmd).toContain("--resume");
-      expect(cmd).toContain("session-abc123");
+      const cmds = getCmds();
+      const newWindowCmd = cmds.find((c) => c.includes("new-window"));
+      expect(newWindowCmd).toContain("--resume");
+      expect(newWindowCmd).toContain("session-abc123");
     });
   });
 
   describe("isProcessAlive", () => {
-    it("returns true when pane command contains claude and pane is alive", () => {
-      execSyncMock.mockReturnValue("claude 0");
-
-      expect(isProcessAlive("test-session", "cc-window1")).toBe(true);
+    it("returns true when pane command contains claude and pane is alive", async () => {
+      execMock.mockImplementation(mockSuccess("claude 0"));
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(true);
     });
 
-    it("returns false when pane command is something else", () => {
-      execSyncMock.mockReturnValue("bash 0");
-
-      expect(isProcessAlive("test-session", "cc-window1")).toBe(false);
+    it("returns false when pane command is something else", async () => {
+      execMock.mockImplementation(mockSuccess("bash 0"));
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
 
-    it("returns false when pane is dead even if command is claude (remain-on-exit)", () => {
-      execSyncMock.mockReturnValue("claude 1");
-
-      expect(isProcessAlive("test-session", "cc-window1")).toBe(false);
+    it("returns false when pane is dead even if command is claude (remain-on-exit)", async () => {
+      execMock.mockImplementation(mockSuccess("claude 1"));
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
 
-    it("returns false on error", () => {
-      execSyncMock.mockImplementation(() => {
-        throw new Error("window not found");
-      });
-
-      expect(isProcessAlive("test-session", "cc-window1")).toBe(false);
+    it("returns false on error", async () => {
+      execMock.mockImplementation(mockError("window not found"));
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
   });
 
   describe("windowExists", () => {
-    it("returns true when window can be selected", () => {
-      execSyncMock.mockReturnValue("");
-      expect(windowExists("test-session", "cc-window1")).toBe(true);
+    it("returns true when window can be selected", async () => {
+      expect(await windowExists("test-session", "cc-window1")).toBe(true);
     });
 
-    it("returns false when window cannot be selected", () => {
-      execSyncMock.mockImplementation(() => {
-        throw new Error("not found");
-      });
-      expect(windowExists("test-session", "cc-window1")).toBe(false);
+    it("returns false when window cannot be selected", async () => {
+      execMock.mockImplementation(mockError("not found"));
+      expect(await windowExists("test-session", "cc-window1")).toBe(false);
     });
   });
 
   describe("killWindow", () => {
-    it("calls tmux kill-window", () => {
-      execSyncMock.mockReturnValue("");
+    it("calls tmux kill-window", async () => {
+      await killWindow("test-session", "cc-window1");
 
-      killWindow("test-session", "cc-window1");
-
-      expect(execSyncMock).toHaveBeenCalledTimes(1);
-      const cmd = execSyncMock.mock.calls[0][0] as string;
-      expect(cmd).toContain("kill-window");
-      expect(cmd).toContain("cc-window1");
+      expect(execMock).toHaveBeenCalledTimes(1);
+      expect(getCmds()[0]).toContain("kill-window");
+      expect(getCmds()[0]).toContain("cc-window1");
     });
 
-    it("does not throw when window already gone", () => {
-      execSyncMock.mockImplementation(() => {
-        throw new Error("not found");
-      });
-
-      expect(() => killWindow("test-session", "cc-window1")).not.toThrow();
+    it("does not throw when window already gone", async () => {
+      execMock.mockImplementation(mockError("not found"));
+      await killWindow("test-session", "cc-window1");
+      // No error thrown
     });
   });
 
   describe("createWindow regression: no shell wrapper", () => {
-    it("runs claude command directly without wrapping in bash/shell", () => {
-      execSyncMock.mockReturnValue("");
-
-      createWindow(
+    it("runs claude command directly without wrapping in bash/shell", async () => {
+      await createWindow(
         {
           tmuxSession: "test-session",
           claudeCommand: "claude",
@@ -180,23 +173,16 @@ describe("tmux-manager", () => {
         },
       );
 
-      const newWindowCall = execSyncMock.mock.calls.find(
-        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
-      );
-      const cmd = newWindowCall![0] as string;
-      // The command must NOT be wrapped in bash -c, sh -c, or any shell intermediary.
-      // A shell wrapper would change tmux's pane_current_command from "claude" to "bash",
-      // causing isProcessAlive() to return false even while CC is running.
+      const cmds = getCmds();
+      const cmd = cmds.find((c) => c.includes("new-window"))!;
       expect(cmd).not.toMatch(/bash\s+-c/);
       expect(cmd).not.toMatch(/sh\s+-c/);
       expect(cmd).not.toContain("mkdir -p");
       expect(cmd).not.toContain("echo $?");
     });
 
-    it("sets NODE_OPTIONS env var to limit V8 heap", () => {
-      execSyncMock.mockReturnValue("");
-
-      createWindow(
+    it("sets NODE_OPTIONS env var to limit V8 heap", async () => {
+      await createWindow(
         {
           tmuxSession: "test-session",
           claudeCommand: "claude",
@@ -208,18 +194,14 @@ describe("tmux-manager", () => {
         },
       );
 
-      const newWindowCall = execSyncMock.mock.calls.find(
-        (call) => typeof call[0] === "string" && call[0].includes("new-window"),
-      );
-      const cmd = newWindowCall![0] as string;
+      const cmds = getCmds();
+      const cmd = cmds.find((c) => c.includes("new-window"))!;
       expect(cmd).toContain("-e");
       expect(cmd).toContain("NODE_OPTIONS=--max-old-space-size=1024");
     });
 
-    it("sets remain-on-exit after creating window", () => {
-      execSyncMock.mockReturnValue("");
-
-      createWindow(
+    it("sets remain-on-exit after creating window", async () => {
+      await createWindow(
         {
           tmuxSession: "test-session",
           claudeCommand: "claude",
@@ -231,42 +213,34 @@ describe("tmux-manager", () => {
         },
       );
 
-      const setOptionCall = execSyncMock.mock.calls.find(
-        (call) =>
-          typeof call[0] === "string" && call[0].includes("remain-on-exit"),
-      );
-      expect(setOptionCall).toBeDefined();
-      expect(setOptionCall![0]).toContain("set-option");
-      expect(setOptionCall![0]).toContain("remain-on-exit");
-      expect(setOptionCall![0]).toContain("on");
+      const cmds = getCmds();
+      const cmd = cmds.find((c) => c.includes("remain-on-exit"));
+      expect(cmd).toBeDefined();
+      expect(cmd).toContain("set-option");
+      expect(cmd).toContain("remain-on-exit");
+      expect(cmd).toContain("on");
     });
   });
 
   describe("readExitCode", () => {
-    it("returns exit code when pane is dead", () => {
-      execSyncMock.mockReturnValueOnce("1 134"); // pane_dead + pane_dead_status
-
-      expect(readExitCode("test-session", "cc-window1")).toBe(134);
+    it("returns exit code when pane is dead", async () => {
+      execMock.mockImplementation(mockSuccess("1 134"));
+      expect(await readExitCode("test-session", "cc-window1")).toBe(134);
     });
 
-    it("returns 0 for empty status string (normal exit)", () => {
-      execSyncMock.mockReturnValueOnce("1 "); // pane_dead + empty status
-
-      expect(readExitCode("test-session", "cc-window1")).toBe(0);
+    it("returns 0 for empty status string (normal exit)", async () => {
+      execMock.mockImplementation(mockSuccess("1 "));
+      expect(await readExitCode("test-session", "cc-window1")).toBe(0);
     });
 
-    it("returns null when pane is still alive", () => {
-      execSyncMock.mockReturnValueOnce("0 "); // pane_dead=0
-
-      expect(readExitCode("test-session", "cc-window1")).toBeNull();
+    it("returns null when pane is still alive", async () => {
+      execMock.mockImplementation(mockSuccess("0 "));
+      expect(await readExitCode("test-session", "cc-window1")).toBeNull();
     });
 
-    it("returns null on error", () => {
-      execSyncMock.mockImplementation(() => {
-        throw new Error("window not found");
-      });
-
-      expect(readExitCode("test-session", "cc-window1")).toBeNull();
+    it("returns null on error", async () => {
+      execMock.mockImplementation(mockError("window not found"));
+      expect(await readExitCode("test-session", "cc-window1")).toBeNull();
     });
   });
 });

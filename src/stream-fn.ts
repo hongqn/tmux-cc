@@ -112,12 +112,12 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const finalText = stripBootstrapWarnings(rawText);
 
         // Step 4: Get or create the Claude Code session
-        const session = getOrCreateSession(sessionKey, config.defaultModel, config);
+        const session = await getOrCreateSession(sessionKey, config.defaultModel, config);
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 
 
         // Step 5: Ensure Claude Code process is alive
-        if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+        if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
           console.error(`[tmux-cc] process not alive in window=${session.windowName}`);
           // Session will be restarted by getOrCreateSession on next call
           emitTextResponse(stream, "REDACTEDÔREDACTED Claude Code process failed to start. Please retry.");
@@ -143,12 +143,12 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 7: Send message via tmux
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         try {
-          sendKeys(config.tmuxSession, session.windowName, finalText);
+          await sendKeys(config.tmuxSession, session.windowName, finalText);
         } catch (e) {
           // Window may have been killed between isProcessAlive check and sendKeys
           console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
           emitTextResponse(stream, "REDACTEDÔREDACTED Claude Code session is unavailable. Please retry.");
-          killWindow(config.tmuxSession, session.windowName);
+          await killWindow(config.tmuxSession, session.windowName);
           return;
         }
 
@@ -158,11 +158,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
         // This prevents the gateway's CommandLane from getting permanently
         // stuck (gateway bug: lane slot not released on embedded run error).
-        if (!response && !isProcessAlive(config.tmuxSession, session.windowName)) {
+        if (!response && !(await isProcessAlive(config.tmuxSession, session.windowName))) {
           console.log(`[tmux-cc] CC died, restarting with --resume`);
-          restartSession(session, config);
+          await restartSession(session, config);
 
-          if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+          if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
             console.error(`[tmux-cc] restart failed, CC still not alive`);
             emitTextResponse(stream, "Claude Code process crashed and could not be restarted. Please retry.");
             return;
@@ -172,17 +172,17 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           offsetBeforeSend = 0;
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
-          sendKeys(config.tmuxSession, session.windowName, finalText);
+          await sendKeys(config.tmuxSession, session.windowName, finalText);
 
           response = await pollForResponse(session, offsetBeforeSend, config);
         }
 
         if (!response) {
-          const ccAlive = isProcessAlive(config.tmuxSession, session.windowName);
+          const ccAlive = await isProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
             console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
             emitTextResponse(stream, "Claude Code process crashed. Please retry.");
-            killWindow(config.tmuxSession, session.windowName);
+            await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
             emitTextResponse(stream, "Claude Code response timed out. Please retry.");
@@ -482,10 +482,10 @@ async function pollForResponse(
           lastLogTime = now;
 
           // Check if CC process died before writing any transcript
-          if (!isProcessAlive(config.tmuxSession, session.windowName)) {
-            const exitCode = readExitCode(config.tmuxSession, session.windowName);
-            const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
-            const crashLog = readCrashLog(session.windowName, 50);
+          if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
+            const exitCode = await readExitCode(config.tmuxSession, session.windowName);
+            const paneContent = await capturePane(config.tmuxSession, session.windowName, 30);
+            const crashLog = await readCrashLog(session.windowName, 50);
             console.error(`[tmux-cc] poll #${pollCount}: CC died before transcript. exitCode=${exitCode ?? "unknown"}`);
             if (paneContent) {
               console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
@@ -498,19 +498,19 @@ async function pollForResponse(
 
           // CC may be stuck on bypass permissions or trust prompt after waitForReady timeout
           try {
-            const content = capturePane(config.tmuxSession, session.windowName, 20);
+            const content = await capturePane(config.tmuxSession, session.windowName, 20);
             if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
               console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
-              sendTmuxKey(config.tmuxSession, session.windowName, "Down");
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
               await sleep(300);
-              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
             } else if (content?.includes("I trust this folder")) {
               console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
-              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
             } else if (content?.includes("[Pasted text #")) {
               // CC received the paste but hasn't started processing (v2.1.96+)
               console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
-              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
             }
           } catch {
             // Ignore errors from prompt check
@@ -564,7 +564,7 @@ async function pollForResponse(
       // Note: REDACTED is always visible in Claude Code's TUI, so we cannot
       // use isWindowReady() for idle detection.
       if (!response.isComplete && response.text) {
-        if (!isClaudeProcessing(config.tmuxSession, session.windowName)) {
+        if (!(await isClaudeProcessing(config.tmuxSession, session.windowName))) {
           console.log(`[tmux-cc] poll #${pollCount}: CC not processing, treating as complete. textLen=${response.text.length}`);
           response.isComplete = true;
           return response;
@@ -574,11 +574,11 @@ async function pollForResponse(
       // No new entries REDACTED check if Claude Code exited (window gone or
       // process dead).  When it exits mid-turn the transcript stops
       // growing, so we'd otherwise spin here until the timeout.
-      if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+      if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
         // Capture crash diagnostics before anything else
-        const exitCode = readExitCode(config.tmuxSession, session.windowName);
-        const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
-        const crashLog = readCrashLog(session.windowName, 50);
+        const exitCode = await readExitCode(config.tmuxSession, session.windowName);
+        const paneContent = await capturePane(config.tmuxSession, session.windowName, 30);
+        const crashLog = await readCrashLog(session.windowName, 50);
         console.error(`[tmux-cc] poll #${pollCount}: CC process died. exitCode=${exitCode ?? "unknown"}`);
         if (paneContent) {
           console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);

@@ -3,14 +3,14 @@ import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSes
 import * as tmuxManager from "./tmux-manager.js";
 
 vi.mock("./tmux-manager.js", () => ({
-  createWindow: vi.fn(),
-  isProcessAlive: vi.fn(() => false),
-  isWindowReady: vi.fn(() => false),
-  killSession: vi.fn(),
-  killWindow: vi.fn(),
-  listWindows: vi.fn(() => []),
-  waitForReady: vi.fn(() => true),
-  windowExists: vi.fn(() => false),
+  createWindow: vi.fn(() => Promise.resolve()),
+  isProcessAlive: vi.fn(() => Promise.resolve(false)),
+  isWindowReady: vi.fn(() => Promise.resolve(false)),
+  killSession: vi.fn(() => Promise.resolve()),
+  killWindow: vi.fn(() => Promise.resolve()),
+  listWindows: vi.fn(() => Promise.resolve([])),
+  waitForReady: vi.fn(() => Promise.resolve(true)),
+  windowExists: vi.fn(() => Promise.resolve(false)),
 }));
 
 describe("session-map", () => {
@@ -47,45 +47,45 @@ describe("session-map", () => {
       _setHasEverCreatedSession(true);
     });
 
-    it("skips cleanup when no session has ever been created", () => {
+    it("skips cleanup when no session has ever been created", async () => {
       _setHasEverCreatedSession(false);
-      vi.mocked(tmuxManager.listWindows).mockReturnValue(["bash", "cc-orphan"]);
+      vi.mocked(tmuxManager.listWindows).mockResolvedValue(["bash", "cc-orphan"]);
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(0);
       expect(tmuxManager.killWindow).not.toHaveBeenCalled();
     });
 
-    it("kills orphaned cc-* windows not tracked in sessions Map", () => {
-      vi.mocked(tmuxManager.listWindows).mockImplementation((session: string) => {
+    it("kills orphaned cc-* windows not tracked in sessions Map", async () => {
+      vi.mocked(tmuxManager.listWindows).mockImplementation(async (session: string) => {
         if (session === "openclaw-cc") {
           return ["bash", "cc-orphan1", "cc-orphan2"];
         }
         return [];
       });
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(2);
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-cc", "cc-orphan1");
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-cc", "cc-orphan2");
     });
 
-    it("does not kill non-cc-* windows", () => {
-      vi.mocked(tmuxManager.listWindows).mockImplementation((session: string) => {
+    it("does not kill non-cc-* windows", async () => {
+      vi.mocked(tmuxManager.listWindows).mockImplementation(async (session: string) => {
         if (session === "openclaw-cc") {
           return ["bash", "other-window"];
         }
         return [];
       });
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(0);
       expect(tmuxManager.killWindow).not.toHaveBeenCalled();
     });
 
-    it("cleans up legacy openclaw-claude sessions", () => {
+    it("cleans up legacy openclaw-claude sessions", async () => {
       const listWindowsCalls: string[] = [];
-      vi.mocked(tmuxManager.listWindows).mockImplementation((session: string) => {
+      vi.mocked(tmuxManager.listWindows).mockImplementation(async (session: string) => {
         listWindowsCalls.push(session);
         if (session === "openclaw-claude") {
           // First call: before cleanup. Second call: after cleanup (bash remains)
@@ -96,7 +96,7 @@ describe("session-map", () => {
         return [];
       });
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(2);
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-claude", "cc-old1");
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-claude", "cc-old2");
@@ -104,24 +104,24 @@ describe("session-map", () => {
       expect(tmuxManager.killSession).toHaveBeenCalledWith("openclaw-claude");
     });
 
-    it("kills entire legacy session when all windows are orphaned", () => {
+    it("kills entire legacy session when all windows are orphaned", async () => {
       vi.mocked(tmuxManager.listWindows)
-        .mockImplementationOnce(() => []) // current session: empty
-        .mockImplementationOnce(() => ["cc-orphan"]) // legacy: has orphan
-        .mockImplementationOnce(() => []); // legacy after cleanup: empty
+        .mockResolvedValueOnce([]) // current session: empty
+        .mockResolvedValueOnce(["cc-orphan"]) // legacy: has orphan
+        .mockResolvedValueOnce([]); // legacy after cleanup: empty
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(1);
       expect(tmuxManager.killSession).toHaveBeenCalledWith("openclaw-claude");
     });
 
-    it("does not kill legacy session if non-cc windows remain", () => {
+    it("does not kill legacy session if non-cc windows remain", async () => {
       vi.mocked(tmuxManager.listWindows)
-        .mockImplementationOnce(() => []) // current session
-        .mockImplementationOnce(() => ["bash", "cc-orphan", "manual-window"]) // legacy
-        .mockImplementationOnce(() => ["bash", "manual-window"]); // legacy after cleanup
+        .mockResolvedValueOnce([]) // current session
+        .mockResolvedValueOnce(["bash", "cc-orphan", "manual-window"]) // legacy
+        .mockResolvedValueOnce(["bash", "manual-window"]); // legacy after cleanup
 
-      const cleaned = cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
+      const cleaned = await cleanupOrphanedWindows({ tmuxSession: "openclaw-cc" });
       expect(cleaned).toBe(1);
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-claude", "cc-orphan");
       expect(tmuxManager.killSession).not.toHaveBeenCalled();

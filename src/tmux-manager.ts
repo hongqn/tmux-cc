@@ -4,7 +4,10 @@
  * Each OpenClaw conversation maps to a dedicated tmux window running
  * a Claude Code CLI process.
  */
-import { execSync, type ExecSyncOptionsWithStringEncoding } from "node:child_process";
+import { exec as cpExec } from "node:child_process";
+import { promisify } from "node:util";
+
+const execPromise = promisify(cpExec);
 
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
@@ -31,33 +34,33 @@ export interface CreateWindowOptions {
   resumeSessionId?: string;
 }
 
-const execOpts: ExecSyncOptionsWithStringEncoding = {
-  encoding: "utf-8",
-  timeout: 10_000,
-  stdio: ["pipe", "pipe", "pipe"],
-};
-
 /** Execute a shell command and return trimmed stdout. */
-function exec(cmd: string): string {
-  return execSync(cmd, execOpts).trim();
+async function exec(cmd: string): Promise<string> {
+  const { stdout } = await execPromise(cmd, { encoding: "utf-8", timeout: 10_000 });
+  return stdout.trim();
+}
+
+/** Async sleep using setTimeout. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
  * Ensure the tmux session exists. Creates it in detached mode if needed.
  */
-export function ensureTmuxSession(sessionName: string): void {
+export async function ensureTmuxSession(sessionName: string): Promise<void> {
   try {
-    exec(`tmux has-session -t ${shellEscape(sessionName)} 2>/dev/null`);
+    await exec(`tmux has-session -t ${shellEscape(sessionName)} 2>/dev/null`);
   } catch {
-    exec(`tmux new-session -d -s ${shellEscape(sessionName)}`);
+    await exec(`tmux new-session -d -s ${shellEscape(sessionName)}`);
   }
 }
 
 /**
  * Create a new tmux window running Claude Code.
  */
-export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowOptions): void {
-  ensureTmuxSession(opts.tmuxSession);
+export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowOptions): Promise<void> {
+  await ensureTmuxSession(opts.tmuxSession);
 
   const args = [
     opts.claudeCommand,
@@ -80,14 +83,14 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   const heapLimit = opts.maxHeapMB ?? DEFAULT_MAX_HEAP_MB;
   const envFlag = `-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`;
 
-  exec(
+  await exec(
     `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${envFlag} ${shellEscape(cmd)}`,
   );
 
   // Keep the pane alive after CC exits so we can read exit code + last output
   const windowTarget = `${shellEscape(opts.tmuxSession)}:${shellEscape(windowOpts.windowName)}`;
   try {
-    exec(`tmux set-option -t ${windowTarget} remain-on-exit on`);
+    await exec(`tmux set-option -t ${windowTarget} remain-on-exit on`);
   } catch {
     // Non-fatal REDACTED diagnostics just won't be available
   }
@@ -96,7 +99,7 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
   // This captures stdout+stderr even if the tmux window disappears.
   try {
     const logFile = `/tmp/cc-${windowOpts.windowName}.log`;
-    exec(`tmux pipe-pane -t ${windowTarget} -o 'cat >> ${shellEscape(logFile)}'`);
+    await exec(`tmux pipe-pane -t ${windowTarget} -o 'cat >> ${shellEscape(logFile)}'`);
   } catch {
     // Non-fatal
   }
@@ -109,26 +112,26 @@ export function createWindow(opts: TmuxManagerOptions, windowOpts: CreateWindowO
  * Adds a delay before pressing Enter to accommodate Claude Code's TUI
  * (matching ccgram's 500ms workaround).
  */
-export function sendKeys(tmuxSession: string, windowName: string, text: string): void {
+export async function sendKeys(tmuxSession: string, windowName: string, text: string): Promise<void> {
   const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
 
   // Send the text in literal mode (no key binding interpretation)
-  exec(`tmux send-keys -t ${target} -l ${shellEscape(text)}`);
+  await exec(`tmux send-keys -t ${target} -l ${shellEscape(text)}`);
 
   // Wait before pressing Enter REDACTED Claude Code TUI needs time
-  sleepSync(SEND_KEYS_DELAY_MS);
+  await sleep(SEND_KEYS_DELAY_MS);
 
   // Press Enter
-  exec(`tmux send-keys -t ${target} Enter`);
+  await exec(`tmux send-keys -t ${target} Enter`);
 }
 
 /**
  * Send a raw tmux key (e.g., "Down", "Enter") to a window.
  * Unlike sendKeys, this does NOT use -l (literal) mode.
  */
-export function sendTmuxKey(tmuxSession: string, windowName: string, key: string): void {
+export async function sendTmuxKey(tmuxSession: string, windowName: string, key: string): Promise<void> {
   const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-  exec(`tmux send-keys -t ${target} ${key}`);
+  await exec(`tmux send-keys -t ${target} ${key}`);
 }
 
 /**
@@ -137,10 +140,10 @@ export function sendTmuxKey(tmuxSession: string, windowName: string, key: string
  * Uses list-panes instead of display-message to avoid silent fallback
  * to the default window when the target window doesn't exist.
  */
-export function isProcessAlive(tmuxSession: string, windowName: string): boolean {
+export async function isProcessAlive(tmuxSession: string, windowName: string): Promise<boolean> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const info = exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
+    const info = await exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
     // With remain-on-exit, pane_current_command still shows "claude" even
     // after the process exits.  Check pane_dead to avoid false positives.
     const dead = info.endsWith(" 1");
@@ -155,10 +158,10 @@ export function isProcessAlive(tmuxSession: string, windowName: string): boolean
 /**
  * Check if a tmux window exists.
  */
-export function windowExists(tmuxSession: string, windowName: string): boolean {
+export async function windowExists(tmuxSession: string, windowName: string): Promise<boolean> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    exec(`tmux select-window -t ${target}`);
+    await exec(`tmux select-window -t ${target}`);
     return true;
   } catch {
     return false;
@@ -168,10 +171,10 @@ export function windowExists(tmuxSession: string, windowName: string): boolean {
 /**
  * Kill a tmux window (destroys the Claude Code process).
  */
-export function killWindow(tmuxSession: string, windowName: string): void {
+export async function killWindow(tmuxSession: string, windowName: string): Promise<void> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    exec(`tmux kill-window -t ${target}`);
+    await exec(`tmux kill-window -t ${target}`);
   } catch {
     // Window may already be gone
   }
@@ -182,10 +185,10 @@ export function killWindow(tmuxSession: string, windowName: string): void {
  * Useful for crash diagnostics REDACTED captures error messages CC may have
  * printed before exiting.  Works with remain-on-exit panes.
  */
-export function capturePane(tmuxSession: string, windowName: string, lines = 50): string {
+export async function capturePane(tmuxSession: string, windowName: string, lines = 50): Promise<string> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    return exec(`tmux capture-pane -t ${target} -p -S -${lines}`);
+    return await exec(`tmux capture-pane -t ${target} -p -S -${lines}`);
   } catch {
     return "";
   }
@@ -196,12 +199,10 @@ export function capturePane(tmuxSession: string, windowName: string, lines = 50)
  * Only works when remain-on-exit is on and the pane's process has exited.
  * Returns the exit code as a number, or null if unavailable.
  */
-export function readExitCode(tmuxSession: string, windowName: string): number | null {
+export async function readExitCode(tmuxSession: string, windowName: string): Promise<number | null> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    // Use list-panes instead of display-message to avoid silent fallback
-    // to the default window when the target window doesn't exist.
-    const info = exec(`tmux list-panes -t ${target} -F "#{pane_dead} #{pane_dead_status}"`);
+    const info = await exec(`tmux list-panes -t ${target} -F "#{pane_dead} #{pane_dead_status}"`);
     const parts = info.split(" ");
     const dead = parts[0];
     if (dead !== "1") {
@@ -223,10 +224,10 @@ export function readExitCode(tmuxSession: string, windowName: string): number | 
  * Read the crash log captured by pipe-pane.
  * Returns the last N lines from the log file, or empty string if unavailable.
  */
-export function readCrashLog(windowName: string, lines = 50): string {
+export async function readCrashLog(windowName: string, lines = 50): Promise<string> {
   try {
     const logFile = `/tmp/cc-${windowName}.log`;
-    return exec(`tail -n ${lines} ${shellEscape(logFile)} 2>/dev/null`);
+    return await exec(`tail -n ${lines} ${shellEscape(logFile)} 2>/dev/null`);
   } catch {
     return "";
   }
@@ -235,9 +236,9 @@ export function readCrashLog(windowName: string, lines = 50): string {
 /**
  * Clean up the crash log file for a window.
  */
-export function cleanupCrashLog(windowName: string): void {
+export async function cleanupCrashLog(windowName: string): Promise<void> {
   try {
-    exec(`rm -f /tmp/cc-${shellEscape(windowName)}.log`);
+    await exec(`rm -f /tmp/cc-${shellEscape(windowName)}.log`);
   } catch {
     // Ignore
   }
@@ -247,10 +248,10 @@ export function cleanupCrashLog(windowName: string): void {
  * Check if Claude Code in a tmux window is ready (has the REDACTED prompt).
  * Unlike waitForReady, this does not wait or auto-dismiss prompts.
  */
-export function isWindowReady(tmuxSession: string, windowName: string): boolean {
+export async function isWindowReady(tmuxSession: string, windowName: string): Promise<boolean> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const content = exec(`tmux capture-pane -t ${target} -p`);
+    const content = await exec(`tmux capture-pane -t ${target} -p`);
     return content.includes("\u276F");
   } catch {
     return false;
@@ -264,10 +265,10 @@ export function isWindowReady(tmuxSession: string, windowName: string): boolean 
  * The REDACTED prompt is always visible in the TUI even during processing,
  * so we cannot use it for idle detection.
  */
-export function isClaudeProcessing(tmuxSession: string, windowName: string): boolean {
+export async function isClaudeProcessing(tmuxSession: string, windowName: string): Promise<boolean> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-    const content = exec(`tmux capture-pane -t ${target} -p`);
+    const content = await exec(`tmux capture-pane -t ${target} -p`);
     return content.includes("esc to int");
   } catch {
     return false;
@@ -283,19 +284,19 @@ export function isClaudeProcessing(tmuxSession: string, windowName: string): boo
  *
  * @returns true if process is ready, false if timeout
  */
-export function waitForReady(
+export async function waitForReady(
   tmuxSession: string,
   windowName: string,
   timeoutMs: number = READY_TIMEOUT_MS,
-): boolean {
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 
   // Phase 1: process alive
   while (Date.now() < deadline) {
-    if (isProcessAlive(tmuxSession, windowName)) {
+    if (await isProcessAlive(tmuxSession, windowName)) {
       break;
     }
-    sleepSync(READY_POLL_INTERVAL_MS);
+    await sleep(READY_POLL_INTERVAL_MS);
   }
   if (Date.now() >= deadline) {
     return false;
@@ -306,21 +307,21 @@ export function waitForReady(
   while (Date.now() < deadline) {
     try {
       const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-      const content = exec(`tmux capture-pane -t ${target} -p`);
+      const content = await exec(`tmux capture-pane -t ${target} -p`);
 
       // Auto-dismiss workspace trust prompt (option 1 "Yes, I trust" is pre-selected)
       if (content.includes("I trust this folder")) {
-        exec(`tmux send-keys -t ${target} Enter`);
-        sleepSync(2000);
+        await exec(`tmux send-keys -t ${target} Enter`);
+        await sleep(2000);
         continue;
       }
 
       // Auto-dismiss bypass permissions confirmation (need to select option 2)
       if (content.includes("Yes, I accept") && content.includes("Bypass Permissions")) {
-        exec(`tmux send-keys -t ${target} Down`);
-        sleepSync(300);
-        exec(`tmux send-keys -t ${target} Enter`);
-        sleepSync(2000);
+        await exec(`tmux send-keys -t ${target} Down`);
+        await sleep(300);
+        await exec(`tmux send-keys -t ${target} Enter`);
+        await sleep(2000);
         continue;
       }
 
@@ -330,7 +331,7 @@ export function waitForReady(
     } catch {
       // pane may not exist yet
     }
-    sleepSync(READY_POLL_INTERVAL_MS);
+    await sleep(READY_POLL_INTERVAL_MS);
   }
   return false;
 }
@@ -339,9 +340,9 @@ export function waitForReady(
  * List all window names in a tmux session.
  * Returns an empty array if the session doesn't exist.
  */
-export function listWindows(tmuxSession: string): string[] {
+export async function listWindows(tmuxSession: string): Promise<string[]> {
   try {
-    const output = exec(
+    const output = await exec(
       `tmux list-windows -t ${shellEscape(tmuxSession)} -F "#{window_name}"`,
     );
     return output.split("\n").filter(Boolean);
@@ -353,17 +354,12 @@ export function listWindows(tmuxSession: string): string[] {
 /**
  * Kill an entire tmux session and all its windows.
  */
-export function killSession(tmuxSession: string): void {
+export async function killSession(tmuxSession: string): Promise<void> {
   try {
-    exec(`tmux kill-session -t ${shellEscape(tmuxSession)}`);
+    await exec(`tmux kill-session -t ${shellEscape(tmuxSession)}`);
   } catch {
     // Session may already be gone
   }
-}
-
-/** Synchronous sleep using Atomics.wait on a SharedArrayBuffer. */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** Escape a string for safe use in shell commands. */

@@ -75,18 +75,18 @@ export function getSession(sessionKey: string): SessionState | null {
  * If CC is currently processing, sends Escape to interrupt it,
  * then polls until it becomes idle (up to 15s).
  */
-function waitForIdle(tmuxSession: string, windowName: string): void {
-  if (!isClaudeProcessing(tmuxSession, windowName)) {
+async function waitForIdle(tmuxSession: string, windowName: string): Promise<void> {
+  if (!(await isClaudeProcessing(tmuxSession, windowName))) {
     return;
   }
 
   console.log(`[tmux-cc] waitForIdle: CC is processing in window=${windowName}, sending Escape to interrupt`);
-  sendTmuxKey(tmuxSession, windowName, "Escape");
+  await sendTmuxKey(tmuxSession, windowName, "Escape");
 
   const deadline = Date.now() + MODEL_SWITCH_INTERRUPT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, MODEL_SWITCH_POLL_MS);
-    if (!isClaudeProcessing(tmuxSession, windowName)) {
+    await new Promise(resolve => setTimeout(resolve, MODEL_SWITCH_POLL_MS));
+    if (!(await isClaudeProcessing(tmuxSession, windowName))) {
       console.log(`[tmux-cc] waitForIdle: CC is now idle in window=${windowName}`);
       return;
     }
@@ -101,22 +101,22 @@ function waitForIdle(tmuxSession: string, windowName: string): void {
  * If no session exists, creates a new tmux window with Claude Code.
  * If the session exists but Claude Code has crashed, restarts it with --resume.
  */
-export function getOrCreateSession(
+export async function getOrCreateSession(
   sessionKey: string,
   model: string,
   config: TmuxClaudeConfig = {},
-): SessionState {
+): Promise<SessionState> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   const existing = sessions.get(sessionKey);
 
   if (existing) {
     // Check if the process is still alive
-    if (isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
+    if (await isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
       // Model changed REDACTED wait for CC to be idle, then send /model command
       if (existing.model !== model) {
         console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} REDACTED ${model}), sending /model command for key=${sessionKey}`);
-        waitForIdle(mergedConfig.tmuxSession, existing.windowName);
-        sendKeys(mergedConfig.tmuxSession, existing.windowName, `/model ${model}`);
+        await waitForIdle(mergedConfig.tmuxSession, existing.windowName);
+        await sendKeys(mergedConfig.tmuxSession, existing.windowName, `/model ${model}`);
         existing.model = model;
       }
       console.log(`[tmux-cc] getOrCreateSession: reusing existing session key=${sessionKey}, window=${existing.windowName}`);
@@ -126,31 +126,31 @@ export function getOrCreateSession(
 
     // Process died REDACTED restart with --resume
     console.log(`[tmux-cc] getOrCreateSession: restarting dead session key=${sessionKey}, window=${existing.windowName}`);
-    return restartSession(existing, mergedConfig);
+    return await restartSession(existing, mergedConfig);
   }
 
   // Create a new session
   console.log(`[tmux-cc] getOrCreateSession: creating new session key=${sessionKey}`);
-  return createNewSession(sessionKey, model, mergedConfig);
+  return await createNewSession(sessionKey, model, mergedConfig);
 }
 
 /**
  * Create a new Claude Code session in a tmux window.
  */
-function createNewSession(
+async function createNewSession(
   sessionKey: string,
   model: string,
   config: Required<TmuxClaudeConfig>,
-): SessionState {
+): Promise<SessionState> {
   const windowName = windowNameFromSessionKey(sessionKey);
 
   // Check if an existing window with this name is still alive and ready
   // (e.g., from a previous gateway run). Reconnect instead of killing it
   // to preserve Claude Code's conversation history.
   if (
-    windowExists(config.tmuxSession, windowName) &&
-    isProcessAlive(config.tmuxSession, windowName) &&
-    isWindowReady(config.tmuxSession, windowName)
+    (await windowExists(config.tmuxSession, windowName)) &&
+    (await isProcessAlive(config.tmuxSession, windowName)) &&
+    (await isWindowReady(config.tmuxSession, windowName))
   ) {
     // Snapshot existing transcript files so pollForResponse can find the
     // NEW file that Claude Code creates when it receives the next message.
@@ -197,15 +197,15 @@ function createNewSession(
 
   // Kill any orphaned tmux window with the same name from a previous gateway
   // run to avoid ambiguous tmux targets.
-  if (windowExists(config.tmuxSession, windowName)) {
+  if (await windowExists(config.tmuxSession, windowName)) {
     console.log(`[tmux-cc] createNewSession: killing orphaned window=${windowName}`);
-    killWindow(config.tmuxSession, windowName);
+    await killWindow(config.tmuxSession, windowName);
   }
 
-  createWindow(tmuxOpts, windowOpts);
+  await createWindow(tmuxOpts, windowOpts);
 
   // Wait for Claude Code to start
-  const ready = waitForReady(config.tmuxSession, windowName);
+  const ready = await waitForReady(config.tmuxSession, windowName);
   console.log(`[tmux-cc] createNewSession: waitForReady=${ready}`);
 
   // Don't discover transcript here REDACTED Claude Code creates the file when the
@@ -229,9 +229,9 @@ function createNewSession(
 /**
  * Restart a crashed Claude Code session using --resume.
  */
-export function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): SessionState {
+export async function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): Promise<SessionState> {
   // Kill the old window if it still exists
-  killWindow(config.tmuxSession, state.windowName);
+  await killWindow(config.tmuxSession, state.windowName);
 
   const tmuxOpts: TmuxManagerOptions = {
     tmuxSession: config.tmuxSession,
@@ -251,8 +251,8 @@ export function restartSession(state: SessionState, config: Required<TmuxClaudeC
   // transcript file and times out.
   const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
 
-  createWindow(tmuxOpts, windowOpts);
-  const ready = waitForReady(config.tmuxSession, state.windowName);
+  await createWindow(tmuxOpts, windowOpts);
+  const ready = await waitForReady(config.tmuxSession, state.windowName);
   console.log(`[tmux-cc] restartSession: window=${state.windowName}, ready=${ready}, snapshotFiles=${existingFiles.size}`);
 
   // Reset transcript state so pollForResponse re-discovers the file
@@ -288,7 +288,7 @@ function discoverTranscript(state: SessionState, workingDirectory: string): void
 /**
  * Clean up idle sessions that have exceeded the idle timeout.
  */
-export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
+export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promise<number> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   const now = Date.now();
   let cleaned = 0;
@@ -297,14 +297,14 @@ export function cleanupIdleSessions(config: TmuxClaudeConfig = {}): number {
     const idleMs = now - state.lastActivityMs;
     if (idleMs > mergedConfig.idleTimeoutMs) {
       console.log(`[tmux-cc] cleanupIdleSessions: inst=${MODULE_INSTANCE_ID} killing idle session key=${key}, window=${state.windowName}, idleMs=${idleMs}`);
-      killWindow(mergedConfig.tmuxSession, state.windowName);
+      await killWindow(mergedConfig.tmuxSession, state.windowName);
       sessions.delete(key);
       cleaned++;
     }
   }
 
   // Also clean up orphaned windows not tracked in the sessions Map.
-  cleaned += cleanupOrphanedWindows(mergedConfig);
+  cleaned += await cleanupOrphanedWindows(mergedConfig);
 
   return cleaned;
 }
@@ -324,7 +324,7 @@ const WINDOW_PREFIX = "cc-";
  * Also kills entire tmux sessions that were created by older plugin versions
  * (e.g., `openclaw-claude`) if all their windows are orphaned.
  */
-export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
+export async function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): Promise<number> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   let cleaned = 0;
 
@@ -343,12 +343,12 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
   }
 
   // Scan the current tmux session for orphaned windows
-  const currentWindows = listWindows(mergedConfig.tmuxSession);
+  const currentWindows = await listWindows(mergedConfig.tmuxSession);
   console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID}, tracked=[${[...trackedWindows].join(",")}], current=[${currentWindows.join(",")}]`);
   for (const winName of currentWindows) {
     if (winName.startsWith(WINDOW_PREFIX) && !trackedWindows.has(winName)) {
       console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID} killing orphaned window=${winName}`);
-      killWindow(mergedConfig.tmuxSession, winName);
+      await killWindow(mergedConfig.tmuxSession, winName);
       cleaned++;
     }
   }
@@ -358,20 +358,20 @@ export function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): number {
   const legacySessions = ["openclaw-claude"];
   for (const legacySession of legacySessions) {
     if (legacySession === mergedConfig.tmuxSession) continue;
-    const legacyWindows = listWindows(legacySession);
+    const legacyWindows = await listWindows(legacySession);
     if (legacyWindows.length === 0) continue;
 
     // Kill all cc-* windows in legacy sessions
     for (const winName of legacyWindows) {
       if (winName.startsWith(WINDOW_PREFIX)) {
-        killWindow(legacySession, winName);
+        await killWindow(legacySession, winName);
         cleaned++;
       }
     }
     // If only the default "bash" window remains, kill the entire session
-    const remaining = listWindows(legacySession);
+    const remaining = await listWindows(legacySession);
     if (remaining.length === 0 || (remaining.length === 1 && remaining[0] === "bash")) {
-      killSession(legacySession);
+      await killSession(legacySession);
     }
   }
 
@@ -393,14 +393,18 @@ export function startCleanupTimer(config: TmuxClaudeConfig = {}): void {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
   // Run immediate orphan cleanup on startup
-  cleanupOrphanedWindows(mergedConfig);
+  cleanupOrphanedWindows(mergedConfig).catch(e => {
+    console.error(`[tmux-cc] startCleanupTimer: orphan cleanup failed: ${e instanceof Error ? e.message : e}`);
+  });
 
   // Check every 5 minutes
   const intervalMs = Math.min(mergedConfig.idleTimeoutMs / 6, 5 * 60 * 1000);
 
   cleanupTimer = setInterval(() => {
     console.log(`[tmux-cc] cleanupInterval: inst=${MODULE_INSTANCE_ID} firing`);
-    cleanupIdleSessions(mergedConfig);
+    cleanupIdleSessions(mergedConfig).catch(e => {
+      console.error(`[tmux-cc] cleanupInterval: error: ${e instanceof Error ? e.message : e}`);
+    });
   }, intervalMs);
 
   // Don't block process exit
@@ -422,10 +426,10 @@ export function stopCleanupTimer(): void {
 /**
  * Destroy all sessions and clean up resources.
  */
-export function destroyAllSessions(config: TmuxClaudeConfig = {}): void {
+export async function destroyAllSessions(config: TmuxClaudeConfig = {}): Promise<void> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   for (const [key, state] of sessions) {
-    killWindow(mergedConfig.tmuxSession, state.windowName);
+    await killWindow(mergedConfig.tmuxSession, state.windowName);
     sessions.delete(key);
   }
   stopCleanupTimer();

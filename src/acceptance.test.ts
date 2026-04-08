@@ -5,7 +5,7 @@ import { join } from "node:path";
  * Acceptance tests for the tmux-cc provider plugin.
  *
  * Tests the end-to-end flow by mocking:
- * - tmux commands (via child_process.execSync)
+ * - tmux commands (via child_process.exec)
  * - JSONL transcript files (via fs)
  *
  * Each test verifies a complete scenario from message input to response output.
@@ -21,41 +21,70 @@ import { createTmuxClaudeStreamFn, extractNewUserMessages } from "./stream-fn.js
 import type { TmuxClaudeConfig, SessionState } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
-// We need to mock child_process.execSync for all tmux commands
-const execSyncMock = vi.hoisted(() => vi.fn());
+// Mock exec from child_process (used via promisify).
+// Use callback-based error signaling to work correctly with promisify.
+const execMock = vi.hoisted(() => vi.fn<any[], any>());
 
 vi.mock("node:child_process", () => ({
-  execSync: execSyncMock,
+  exec: execMock,
 }));
+
+// Helpers for setting mock exec behavior
+function mockSuccess(stdout = "") {
+  return (_cmd: string, _opts: any, callback?: Function) => {
+    const cb = typeof _opts === "function" ? _opts : callback;
+    if (cb) cb(null, { stdout, stderr: "" });
+    return {};
+  };
+}
+
+function mockError(msg: string) {
+  return (_cmd: string, _opts: any, callback?: Function) => {
+    const cb = typeof _opts === "function" ? _opts : callback;
+    if (cb) cb(new Error(msg));
+    return {};
+  };
+}
+
+function getCmds(): string[] {
+  return execMock.mock.calls.map((call: any[]) => call[0] as string);
+}
+
+// Command-routing mock: dispatches based on command content
+function mockRouter(router: (cmd: string) => string) {
+  return (cmd: string, _opts: any, callback?: Function) => {
+    const cb = typeof _opts === "function" ? _opts : callback;
+    try {
+      const stdout = router(cmd);
+      if (cb) cb(null, { stdout, stderr: "" });
+    } catch (e) {
+      if (cb) cb(e);
+    }
+    return {};
+  };
+}
 
 describe("acceptance: session lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: all tmux commands succeed
-    execSyncMock.mockReturnValue("");
+    execMock.mockImplementation(mockSuccess(""));
   });
 
-  afterEach(() => {
-    // Clean up session state between tests
-    destroyAllSessions();
+  afterEach(async () => {
+    await destroyAllSessions();
   });
 
-  it("creates a new tmux window on first message for a session key", () => {
-    // Mock isProcessAlive check REDACTED returns "claude" for pane_current_command
-    // Mock waitForReady Phase 2 REDACTED returns content with REDACTED prompt
-    // windowExists (select-window) should FAIL for the first check REDACTED no existing window
-    execSyncMock.mockImplementation((cmd: string) => {
+  it("creates a new tmux window on first message for a session key", async () => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("has-session")) return "";
       if (cmd.includes("select-window")) throw new Error("window not found");
       if (cmd.includes("new-window")) return "";
-      if (cmd.includes("list-panes") && cmd.includes("pane_current_command")) {
-        return "claude 0";
-      }
+      if (cmd.includes("list-panes") && cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
 
-    const session = getOrCreateSession("test-session-1", "sonnet-4.6", {
+    const session = await getOrCreateSession("test-session-1", "sonnet-4.6", {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     });
@@ -64,13 +93,9 @@ describe("acceptance: session lifecycle", () => {
     expect(session.windowName).toBe("cc-test-session-1");
     expect(session.model).toBe("sonnet-4.6");
 
-    // Verify tmux new-window was called with correct flags
-    const newWindowCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("new-window"),
-    );
-    expect(newWindowCalls.length).toBeGreaterThanOrEqual(1);
-    const windowCmd = newWindowCalls[0][0] as string;
+    const cmds = getCmds();
+    const windowCmd = cmds.find((c) => c.includes("new-window"));
+    expect(windowCmd).toBeDefined();
     expect(windowCmd).toContain("--permission-mode");
     expect(windowCmd).toContain("bypassPermissions");
     expect(windowCmd).not.toContain("--dangerously-skip-permissions");
@@ -78,128 +103,91 @@ describe("acceptance: session lifecycle", () => {
     expect(windowCmd).toContain("sonnet-4.6");
   });
 
-  it("reuses an existing session for the same session key", () => {
+  it("reuses an existing session for the same session key", async () => {
     let selectWindowCallCount = 0;
-    execSyncMock.mockImplementation((cmd: string) => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("select-window")) {
         selectWindowCallCount++;
-        // First select-window check: no existing window yet
         if (selectWindowCallCount === 1) throw new Error("window not found");
         return "";
       }
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
 
-    const session1 = getOrCreateSession("reuse-test", "sonnet-4.6", {
+    const session1 = await getOrCreateSession("reuse-test", "sonnet-4.6", {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     });
-    const session2 = getOrCreateSession("reuse-test", "sonnet-4.6", {
+    const session2 = await getOrCreateSession("reuse-test", "sonnet-4.6", {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     });
 
     expect(session1.windowName).toBe(session2.windowName);
 
-    // new-window should only have been called once
-    const newWindowCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("new-window"),
-    );
+    const newWindowCalls = getCmds().filter((c) => c.includes("new-window"));
     expect(newWindowCalls).toHaveLength(1);
   });
 
-  it("restarts a crashed session with --resume", () => {
-    // Track how many times pane_current_command is polled.
-    // During the first getOrCreateSession: waitForReady polls until it sees "claude".
-    // During the second getOrCreateSession: getOrCreateSession checks isProcessAlive,
-    //   which must see "bash" (dead), triggering restart, then waitForReady
-    //   polls until it sees "claude" again.
+  it("restarts a crashed session with --resume", async () => {
     let aliveCheckCount = 0;
     let sessionCreated = false;
-    execSyncMock.mockImplementation((cmd: string) => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("pane_current_command")) {
         aliveCheckCount++;
-        if (!sessionCreated) {
-          // During first getOrCreateSession: process is alive
-          return "claude 0";
-        }
-        // During second getOrCreateSession:
-        // First check (isProcessAlive inside getOrCreateSession) REDACTED dead
-        // Subsequent checks (waitForReady after restart) REDACTED alive
+        if (!sessionCreated) return "claude 0";
         if (aliveCheckCount === 1) return "bash";
         return "claude 0";
       }
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
 
     const config: TmuxClaudeConfig = {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     };
 
-    // Create initial session
-    const session1 = getOrCreateSession("crash-test", "sonnet-4.6", config);
+    const session1 = await getOrCreateSession("crash-test", "sonnet-4.6", config);
     session1.claudeSessionId = "abc123";
 
-    // Reset counter and mark session as created to change mock behavior
     sessionCreated = true;
     aliveCheckCount = 0;
 
-    // Simulate crash: next getOrCreateSession should detect dead process and restart
-    const session2 = getOrCreateSession("crash-test", "sonnet-4.6", config);
+    const session2 = await getOrCreateSession("crash-test", "sonnet-4.6", config);
 
-    // Same window name REDACTED session was restarted, not recreated
     expect(session2.windowName).toBe(session1.windowName);
 
-    // Verify kill-window was called for the crashed session
-    const killCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("kill-window"),
-    );
-    expect(killCalls.length).toBeGreaterThanOrEqual(1);
+    const cmds = getCmds();
+    expect(cmds.some((c) => c.includes("kill-window"))).toBe(true);
 
-    // Verify new-window was called with --resume and the session ID
-    const resumeCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" &&
-        (call[0] as string).includes("new-window") &&
-        (call[0] as string).includes("--resume"),
-    );
-    expect(resumeCalls.length).toBeGreaterThanOrEqual(1);
-    expect(resumeCalls[0][0] as string).toContain("abc123");
+    const resumeCmds = cmds.filter((c) => c.includes("new-window") && c.includes("--resume"));
+    expect(resumeCmds.length).toBeGreaterThanOrEqual(1);
+    expect(resumeCmds[0]).toContain("abc123");
   });
 
-  it("cleans up idle sessions after timeout", () => {
-    execSyncMock.mockImplementation((cmd: string) => {
+  it("cleans up idle sessions after timeout", async () => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
 
     const config: TmuxClaudeConfig = {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
-      idleTimeoutMs: 1000, // 1 second for test
+      idleTimeoutMs: 1000,
     };
 
-    // Create session
-    const session = getOrCreateSession("idle-test", "sonnet-4.6", config);
-    // Set lastActivityMs to 2 seconds ago
+    const session = await getOrCreateSession("idle-test", "sonnet-4.6", config);
     session.lastActivityMs = Date.now() - 2000;
 
-    const cleaned = cleanupIdleSessions(config);
+    const cleaned = await cleanupIdleSessions(config);
     expect(cleaned).toBe(1);
 
-    // Verify kill-window was called
-    const killCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("kill-window"),
-    );
-    expect(killCalls.length).toBeGreaterThanOrEqual(1);
+    expect(getCmds().some((c) => c.includes("kill-window"))).toBe(true);
   });
 });
 
@@ -362,21 +350,21 @@ describe("acceptance: window naming", () => {
 describe("acceptance: model selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    execSyncMock.mockImplementation((cmd: string) => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("select-window")) throw new Error("window not found");
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
   });
 
-  afterEach(() => {
-    destroyAllSessions();
+  afterEach(async () => {
+    await destroyAllSessions();
   });
 
-  it("sends /model command when model changes on existing session", () => {
+  it("sends /model command when model changes on existing session", async () => {
     let sessionCreated = false;
-    execSyncMock.mockImplementation((cmd: string) => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("select-window")) {
         if (!sessionCreated) throw new Error("window not found");
         return "";
@@ -384,103 +372,70 @@ describe("acceptance: model selection", () => {
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) return "REDACTED ";
       return "";
-    });
+    }));
 
     const config: TmuxClaudeConfig = {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     };
 
-    // Create session with sonnet
-    const session1 = getOrCreateSession("model-switch-test", "sonnet-4.6", config);
+    const session1 = await getOrCreateSession("model-switch-test", "sonnet-4.6", config);
     session1.claudeSessionId = "switch-123";
     sessionCreated = true;
     expect(session1.model).toBe("sonnet-4.6");
 
-    // Switch to opus REDACTED should send /model command, not restart
-    const session2 = getOrCreateSession("model-switch-test", "opus-4.6", config);
+    const session2 = await getOrCreateSession("model-switch-test", "opus-4.6", config);
     expect(session2.model).toBe("opus-4.6");
     expect(session2.windowName).toBe(session1.windowName);
 
-    // Verify /model command was sent via send-keys
-    const sendKeysCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" &&
-        (call[0] as string).includes("send-keys") &&
-        (call[0] as string).includes("/model opus-4.6"),
-    );
-    expect(sendKeysCalls.length).toBeGreaterThanOrEqual(1);
-
-    // Verify NO kill-window or new-window was called (no restart)
-    const killCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("kill-window"),
-    );
-    expect(killCalls).toHaveLength(0);
+    const cmds = getCmds();
+    expect(cmds.some((c) => c.includes("send-keys") && c.includes("/model opus-4.6"))).toBe(true);
+    expect(cmds.some((c) => c.includes("kill-window"))).toBe(false);
   });
 
-  it("interrupts CC with Escape before /model when CC is processing", () => {
+  it("interrupts CC with Escape before /model when CC is processing", async () => {
     let sessionCreated = false;
     let processingCallCount = 0;
-    execSyncMock.mockImplementation((cmd: string) => {
+    execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("select-window")) {
         if (!sessionCreated) throw new Error("window not found");
         return "";
       }
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) {
-        // First capture-pane call during model switch: CC is processing
-        // Second call: CC is idle
         processingCallCount++;
         if (processingCallCount <= 1) return "esc to interrupt";
         return "REDACTED ";
       }
       return "";
-    });
+    }));
 
     const config: TmuxClaudeConfig = {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     };
 
-    const session1 = getOrCreateSession("interrupt-test", "sonnet-4.6", config);
+    const session1 = await getOrCreateSession("interrupt-test", "sonnet-4.6", config);
     session1.claudeSessionId = "int-123";
     sessionCreated = true;
     processingCallCount = 0;
 
-    getOrCreateSession("interrupt-test", "opus-4.6", config);
+    await getOrCreateSession("interrupt-test", "opus-4.6", config);
 
-    // Verify Escape was sent (non-literal send-keys without -l)
-    const escapeCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" &&
-        (call[0] as string).includes("send-keys") &&
-        (call[0] as string).includes("Escape") &&
-        !(call[0] as string).includes("-l"),
-    );
-    expect(escapeCalls.length).toBeGreaterThanOrEqual(1);
-
-    // Verify /model was still sent after interrupt
-    const modelCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" &&
-        (call[0] as string).includes("send-keys") &&
-        (call[0] as string).includes("/model opus-4.6"),
-    );
-    expect(modelCalls.length).toBeGreaterThanOrEqual(1);
+    const cmds = getCmds();
+    expect(cmds.some((c) => c.includes("send-keys") && c.includes("Escape") && !c.includes("-l"))).toBe(true);
+    expect(cmds.some((c) => c.includes("send-keys") && c.includes("/model opus-4.6"))).toBe(true);
   });
 
-  it("passes the correct model to Claude Code", () => {
-    getOrCreateSession("model-test", "opus-4.6", {
+  it("passes the correct model to Claude Code", async () => {
+    await getOrCreateSession("model-test", "opus-4.6", {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     });
 
-    const newWindowCalls = execSyncMock.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && (call[0] as string).includes("new-window"),
-    );
-    expect(newWindowCalls.length).toBeGreaterThanOrEqual(1);
-    expect(newWindowCalls[0][0] as string).toContain("opus-4.6");
+    const cmds = getCmds();
+    const newWindowCmd = cmds.find((c) => c.includes("new-window"));
+    expect(newWindowCmd).toBeDefined();
+    expect(newWindowCmd).toContain("opus-4.6");
   });
 });
