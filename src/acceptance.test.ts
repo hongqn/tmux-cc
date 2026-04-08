@@ -374,6 +374,102 @@ describe("acceptance: model selection", () => {
     destroyAllSessions();
   });
 
+  it("sends /model command when model changes on existing session", () => {
+    let sessionCreated = false;
+    execSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("select-window")) {
+        if (!sessionCreated) throw new Error("window not found");
+        return "";
+      }
+      if (cmd.includes("pane_current_command")) return "claude 0";
+      if (cmd.includes("capture-pane")) return "REDACTED ";
+      return "";
+    });
+
+    const config: TmuxClaudeConfig = {
+      tmuxSession: "test-tmux",
+      workingDirectory: "/tmp/test-wd",
+    };
+
+    // Create session with sonnet
+    const session1 = getOrCreateSession("model-switch-test", "sonnet-4.6", config);
+    session1.claudeSessionId = "switch-123";
+    sessionCreated = true;
+    expect(session1.model).toBe("sonnet-4.6");
+
+    // Switch to opus REDACTED should send /model command, not restart
+    const session2 = getOrCreateSession("model-switch-test", "opus-4.6", config);
+    expect(session2.model).toBe("opus-4.6");
+    expect(session2.windowName).toBe(session1.windowName);
+
+    // Verify /model command was sent via send-keys
+    const sendKeysCalls = execSyncMock.mock.calls.filter(
+      (call: unknown[]) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).includes("send-keys") &&
+        (call[0] as string).includes("/model opus-4.6"),
+    );
+    expect(sendKeysCalls.length).toBeGreaterThanOrEqual(1);
+
+    // Verify NO kill-window or new-window was called (no restart)
+    const killCalls = execSyncMock.mock.calls.filter(
+      (call: unknown[]) =>
+        typeof call[0] === "string" && (call[0] as string).includes("kill-window"),
+    );
+    expect(killCalls).toHaveLength(0);
+  });
+
+  it("interrupts CC with Escape before /model when CC is processing", () => {
+    let sessionCreated = false;
+    let processingCallCount = 0;
+    execSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("select-window")) {
+        if (!sessionCreated) throw new Error("window not found");
+        return "";
+      }
+      if (cmd.includes("pane_current_command")) return "claude 0";
+      if (cmd.includes("capture-pane")) {
+        // First capture-pane call during model switch: CC is processing
+        // Second call: CC is idle
+        processingCallCount++;
+        if (processingCallCount <= 1) return "esc to interrupt";
+        return "REDACTED ";
+      }
+      return "";
+    });
+
+    const config: TmuxClaudeConfig = {
+      tmuxSession: "test-tmux",
+      workingDirectory: "/tmp/test-wd",
+    };
+
+    const session1 = getOrCreateSession("interrupt-test", "sonnet-4.6", config);
+    session1.claudeSessionId = "int-123";
+    sessionCreated = true;
+    processingCallCount = 0;
+
+    getOrCreateSession("interrupt-test", "opus-4.6", config);
+
+    // Verify Escape was sent (non-literal send-keys without -l)
+    const escapeCalls = execSyncMock.mock.calls.filter(
+      (call: unknown[]) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).includes("send-keys") &&
+        (call[0] as string).includes("Escape") &&
+        !(call[0] as string).includes("-l"),
+    );
+    expect(escapeCalls.length).toBeGreaterThanOrEqual(1);
+
+    // Verify /model was still sent after interrupt
+    const modelCalls = execSyncMock.mock.calls.filter(
+      (call: unknown[]) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).includes("send-keys") &&
+        (call[0] as string).includes("/model opus-4.6"),
+    );
+    expect(modelCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("passes the correct model to Claude Code", () => {
     getOrCreateSession("model-test", "opus-4.6", {
       tmuxSession: "test-tmux",

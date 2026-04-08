@@ -1,11 +1,14 @@
 import { getPersistedClaudeSessionId, persistSession } from "./session-persistence.js";
 import {
   createWindow,
+  isClaudeProcessing,
   isProcessAlive,
   isWindowReady,
   killSession,
   killWindow,
   listWindows,
+  sendKeys,
+  sendTmuxKey,
   waitForReady,
   windowExists,
   type TmuxManagerOptions,
@@ -30,6 +33,9 @@ import { randomBytes } from "node:crypto";
 /** Unique ID for this module instance REDACTED detects multiple module loads. */
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
 console.log(`[tmux-cc] module instance ${MODULE_INSTANCE_ID} loaded`);
+
+const MODEL_SWITCH_POLL_MS = 500;
+const MODEL_SWITCH_INTERRUPT_TIMEOUT_MS = 15_000;
 
 /** In-memory map of session key REDACTED session state. */
 const sessions = new Map<string, SessionState>();
@@ -65,6 +71,31 @@ export function getSession(sessionKey: string): SessionState | null {
 }
 
 /**
+ * Ensure Claude Code is idle before sending a /model command.
+ * If CC is currently processing, sends Escape to interrupt it,
+ * then polls until it becomes idle (up to 15s).
+ */
+function waitForIdle(tmuxSession: string, windowName: string): void {
+  if (!isClaudeProcessing(tmuxSession, windowName)) {
+    return;
+  }
+
+  console.log(`[tmux-cc] waitForIdle: CC is processing in window=${windowName}, sending Escape to interrupt`);
+  sendTmuxKey(tmuxSession, windowName, "Escape");
+
+  const deadline = Date.now() + MODEL_SWITCH_INTERRUPT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, MODEL_SWITCH_POLL_MS);
+    if (!isClaudeProcessing(tmuxSession, windowName)) {
+      console.log(`[tmux-cc] waitForIdle: CC is now idle in window=${windowName}`);
+      return;
+    }
+    console.log(`[tmux-cc] waitForIdle: still waiting for CC to stop in window=${windowName}`);
+  }
+  console.warn(`[tmux-cc] waitForIdle: timed out after ${MODEL_SWITCH_INTERRUPT_TIMEOUT_MS}ms, proceeding anyway`);
+}
+
+/**
  * Get or create a session for the given session key.
  *
  * If no session exists, creates a new tmux window with Claude Code.
@@ -81,6 +112,13 @@ export function getOrCreateSession(
   if (existing) {
     // Check if the process is still alive
     if (isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
+      // Model changed REDACTED wait for CC to be idle, then send /model command
+      if (existing.model !== model) {
+        console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} REDACTED ${model}), sending /model command for key=${sessionKey}`);
+        waitForIdle(mergedConfig.tmuxSession, existing.windowName);
+        sendKeys(mergedConfig.tmuxSession, existing.windowName, `/model ${model}`);
+        existing.model = model;
+      }
       console.log(`[tmux-cc] getOrCreateSession: reusing existing session key=${sessionKey}, window=${existing.windowName}`);
       existing.lastActivityMs = Date.now();
       return existing;
