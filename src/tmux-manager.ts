@@ -105,6 +105,15 @@ export function sendKeys(tmuxSession: string, windowName: string, text: string):
 }
 
 /**
+ * Send a raw tmux key (e.g., "Down", "Enter") to a window.
+ * Unlike sendKeys, this does NOT use -l (literal) mode.
+ */
+export function sendTmuxKey(tmuxSession: string, windowName: string, key: string): void {
+  const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
+  exec(`tmux send-keys -t ${target} ${key}`);
+}
+
+/**
  * Check if Claude Code process is alive in the given tmux window.
  * Returns true if the pane's current command contains "claude".
  */

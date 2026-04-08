@@ -19,7 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow } from "./tmux-manager.js";
+import { sendKeys, sendTmuxKey, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow } from "./tmux-manager.js";
 import {
   readNewEntries,
   extractAssistantResponse,
@@ -480,6 +480,33 @@ async function pollForResponse(
         if (now - lastLogTime > 5000) {
           console.log(`[tmux-cc] poll #${pollCount}: transcript not discovered yet, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
           lastLogTime = now;
+
+          // Check if CC process died before writing any transcript
+          if (!isProcessAlive(config.tmuxSession, session.windowName)) {
+            const exitCode = readExitCode(config.tmuxSession, session.windowName);
+            const paneContent = capturePane(config.tmuxSession, session.windowName, 30);
+            console.error(`[tmux-cc] poll #${pollCount}: CC died before transcript. exitCode=${exitCode ?? "unknown"}`);
+            if (paneContent) {
+              console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+            }
+            return null;
+          }
+
+          // CC may be stuck on bypass permissions or trust prompt after waitForReady timeout
+          try {
+            const content = capturePane(config.tmuxSession, session.windowName, 20);
+            if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
+              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
+              sendTmuxKey(config.tmuxSession, session.windowName, "Down");
+              await sleep(300);
+              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            } else if (content?.includes("I trust this folder")) {
+              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
+              sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            }
+          } catch {
+            // Ignore errors from prompt check
+          }
         }
         await sleep(config.pollingIntervalMs);
         continue;
