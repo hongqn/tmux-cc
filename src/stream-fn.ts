@@ -643,9 +643,24 @@ async function pollForResponse(
         }
       }
     } else {
-      // No new entries REDACTED check if Claude Code exited (window gone or
-      // process dead).  When it exits mid-turn the transcript stops
-      // growing, so we'd otherwise spin here until the timeout.
+      // No new entries REDACTED check if Claude Code finished but wrote
+      // stop_reason: null (common quirk).  If we have accumulated text
+      // from a previous poll and CC is no longer processing, treat it
+      // as complete.
+      if (allEntries.length > 0) {
+        const pendingResponse = extractAssistantResponse(allEntries);
+        if (pendingResponse.text && !pendingResponse.isComplete) {
+          if (!(await isClaudeProcessing(config.tmuxSession, session.windowName))) {
+            console.log(`[tmux-cc] poll #${pollCount}: no new entries, CC idle with pending text. textLen=${pendingResponse.text.length}`);
+            pendingResponse.isComplete = true;
+            return pendingResponse;
+          }
+        }
+      }
+
+      // Check if Claude Code exited (window gone or process dead).
+      // When it exits mid-turn the transcript stops growing, so we'd
+      // otherwise spin here until the timeout.
       if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
         // Capture crash diagnostics before anything else
         const exitCode = await readExitCode(config.tmuxSession, session.windowName);
