@@ -28,7 +28,7 @@ import {
   findGrowingTranscript,
   extractSessionId,
 } from "./transcript-reader.js";
-import type { TmuxClaudeConfig, SessionState, AssistantResponse } from "./types.js";
+import type { TmuxClaudeConfig, SessionState, AssistantResponse, TranscriptEntry } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 export interface StreamFnOptions {
@@ -90,6 +90,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
     const run = async () => {
       let streamStarted = false;
+      let thinkingStartEmitted = false;
       try {
         // Step 1: Derive a stable session key from the conversation
         const sessionKey = deriveSessionKey(context.messages, options?.sessionId);
@@ -153,39 +154,75 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           return;
         }
 
-        // Step 7.5: Emit early stream events to prevent gateway stall timeout.
+        // Step 7.5: Emit early `start` event to prevent gateway stall timeout.
         // The gateway kills streams after ~60s of no events, but CC tool-call
-        // chains can take minutes. Emitting start/text_start now, then
-        // heartbeat text_delta events during polling, keeps the stream alive.
+        // chains can take minutes. We emit `start` now, then stream thinking
+        // and tool-call progress during polling via `onNewEntries` callback.
         const earlyMsg = buildAssistantMessage({ text: "", isComplete: false });
         stream.push({ type: "start", partial: earlyMsg });
-        stream.push({ type: "text_start", contentIndex: 0, partial: earlyMsg });
         streamStarted = true;
-        let lastHeartbeatMs = Date.now();
+
+        // Streaming state REDACTED tracked across polls to emit incremental events
+        let lastProcessedEntryIdx = 0;
+        let lastStreamEventMs = Date.now();
         const HEARTBEAT_INTERVAL_MS = 25_000;
 
-        const heartbeat = () => {
+        const onNewEntries = (allEntries: TranscriptEntry[]) => {
+          // Process only entries we haven't seen yet
+          for (let i = lastProcessedEntryIdx; i < allEntries.length; i++) {
+            const entry = allEntries[i];
+            if (entry.type !== "assistant") continue;
+
+            for (const block of entry.message.content) {
+              if (block.type === "thinking" && block.thinking) {
+                if (!thinkingStartEmitted) {
+                  stream.push({ type: "thinking_start", contentIndex: 0, partial: earlyMsg });
+                  thinkingStartEmitted = true;
+                }
+                stream.push({ type: "thinking_delta", contentIndex: 0, delta: block.thinking, partial: earlyMsg });
+                lastStreamEventMs = Date.now();
+              }
+              if (block.type === "tool_use") {
+                if (!thinkingStartEmitted) {
+                  stream.push({ type: "thinking_start", contentIndex: 0, partial: earlyMsg });
+                  thinkingStartEmitted = true;
+                }
+                const inputStr = JSON.stringify(block.input).slice(0, 200);
+                stream.push({
+                  type: "thinking_delta", contentIndex: 0,
+                  delta: `\nREDACTED ${block.name}: ${inputStr}\n`,
+                  partial: earlyMsg,
+                });
+                lastStreamEventMs = Date.now();
+              }
+            }
+          }
+          lastProcessedEntryIdx = allEntries.length;
+
+          // Heartbeat: if nothing emitted for 25s, emit an empty keepalive
           const now = Date.now();
-          if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
-            stream.push({ type: "text_delta", contentIndex: 0, delta: "", partial: earlyMsg });
-            lastHeartbeatMs = now;
-            console.log(`[tmux-cc] heartbeat: emitted keepalive text_delta`);
+          if (now - lastStreamEventMs >= HEARTBEAT_INTERVAL_MS) {
+            if (!thinkingStartEmitted) {
+              stream.push({ type: "thinking_start", contentIndex: 0, partial: earlyMsg });
+              thinkingStartEmitted = true;
+            }
+            stream.push({ type: "thinking_delta", contentIndex: 0, delta: "", partial: earlyMsg });
+            lastStreamEventMs = now;
+            console.log(`[tmux-cc] heartbeat: emitted keepalive thinking_delta`);
           }
         };
 
         // Step 8: Poll JSONL transcript for response
-        let response = await pollForResponse(session, offsetBeforeSend, config, heartbeat);
+        let response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries);
 
         // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
-        // This prevents the gateway's CommandLane from getting permanently
-        // stuck (gateway bug: lane slot not released on embedded run error).
         if (!response && !(await isProcessAlive(config.tmuxSession, session.windowName))) {
           console.log(`[tmux-cc] CC died, restarting with --resume`);
           await restartSession(session, config);
 
           if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
             console.error(`[tmux-cc] restart failed, CC still not alive`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed and could not be restarted. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed and could not be restarted. Please retry.", thinkingStartEmitted);
             return;
           }
 
@@ -195,45 +232,52 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           await sendKeys(config.tmuxSession, session.windowName, finalText);
 
-          response = await pollForResponse(session, offsetBeforeSend, config, heartbeat);
+          response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries);
         }
 
         if (!response) {
           const ccAlive = await isProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
             console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed. Please retry.", thinkingStartEmitted);
             await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code response timed out. Please retry.");
+            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code response timed out. Please retry.", thinkingStartEmitted);
           }
           return;
         }
         console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
 
         // Step 9: Emit the response as stream close events.
-        // start + text_start were already emitted in Step 7.5.
+        // `start` was emitted in Step 7.5. Thinking events may have been
+        // emitted during polling via `onNewEntries`.
         const assistantMessage = buildAssistantMessage(response);
         console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}`);
 
-        // Combine thinking into text if present (thinking events can't precede
-        // text_start which was already emitted).
-        let fullText = response.text;
-        if (response.thinking) {
-          fullText = `<thinking>\n${response.thinking}\n</thinking>\n\n${response.text}`;
+        // Close thinking if it was opened during polling
+        if (thinkingStartEmitted) {
+          stream.push({ type: "thinking_end", contentIndex: 0, content: "", partial: assistantMessage });
+          console.log(`[tmux-cc] pushed: thinking_end`);
         }
 
+        // Emit text events (text always comes after thinking)
+        const textContentIndex = thinkingStartEmitted ? 1 : 0;
+        stream.push({
+          type: "text_start",
+          contentIndex: textContentIndex,
+          partial: assistantMessage,
+        });
         stream.push({
           type: "text_delta",
-          contentIndex: 0,
-          delta: fullText,
+          contentIndex: textContentIndex,
+          delta: response.text,
           partial: assistantMessage,
         });
         stream.push({
           type: "text_end",
-          contentIndex: 0,
-          content: fullText,
+          contentIndex: textContentIndex,
+          content: response.text,
           partial: assistantMessage,
         });
         console.log(`[tmux-cc] pushed: text events`);
@@ -247,7 +291,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         console.error(`[tmux-cc] run() error:`, err);
         if (streamStarted) {
-          emitStreamClose(stream, `REDACTEDÔREDACTED ${message}`);
+          emitStreamClose(stream, `REDACTEDÔREDACTED ${message}`, thinkingStartEmitted);
         } else {
           emitError(stream, message);
         }
@@ -451,25 +495,21 @@ async function pollForResponse(
   session: SessionState,
   offsetBeforeSend: number,
   config: Required<TmuxClaudeConfig>,
-  heartbeat?: () => void,
+  onNewEntries?: (allEntries: TranscriptEntry[]) => void,
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
-  // Track the actual offset at which we first saw entries after the send.
-  // When transcriptPath is undefined at send time, offsetBeforeSend is 0
-  // but discovery may set a higher initial offset (e.g., snapshot size for
-  // --resume files). We capture that so CC-death re-reads only cover the
-  // current turn, not the entire file.
   let effectiveOffsetBeforeSend = offsetBeforeSend;
   let pollCount = 0;
   let lastLogTime = 0;
+  const allEntries: TranscriptEntry[] = [];
 
   // Small initial delay to let Claude Code start processing
   await sleep(500);
 
   while (Date.now() < deadline) {
     pollCount++;
-    heartbeat?.();
+    onNewEntries?.(allEntries);
 
     if (!session.transcriptPath) {
       // Try to discover the transcript file
@@ -539,6 +579,9 @@ async function pollForResponse(
       deadline = Date.now() + config.responseTimeoutMs;
       // Also update lastActivityMs so idle cleanup won't kill this session
       session.lastActivityMs = Date.now();
+      // Accumulate entries for streaming callback
+      allEntries.push(...result.entries);
+      onNewEntries?.(allEntries);
 
       const entryTypes = result.entries.map(e => e.type).join(",");
       console.log(`[tmux-cc] poll #${pollCount}: ${result.entries.length} new entries [${entryTypes}], offset now=${currentOffset}`);
@@ -732,16 +775,22 @@ function emitTextResponse(
 }
 
 /**
- * Close a stream that already had `start` + `text_start` emitted.
+ * Close a stream that already had `start` emitted (and possibly thinking events).
  * Used for error paths after early stream emission in Step 7.5.
  */
 function emitStreamClose(
   stream: ReturnType<typeof createAssistantMessageEventStream>,
   message: string,
+  thinkingStarted: boolean,
 ): void {
   const assistantMessage = buildAssistantMessage({ text: message, isComplete: true });
-  stream.push({ type: "text_delta", contentIndex: 0, delta: message, partial: assistantMessage });
-  stream.push({ type: "text_end", contentIndex: 0, content: message, partial: assistantMessage });
+  if (thinkingStarted) {
+    stream.push({ type: "thinking_end", contentIndex: 0, content: "", partial: assistantMessage });
+  }
+  const textIndex = thinkingStarted ? 1 : 0;
+  stream.push({ type: "text_start", contentIndex: textIndex, partial: assistantMessage });
+  stream.push({ type: "text_delta", contentIndex: textIndex, delta: message, partial: assistantMessage });
+  stream.push({ type: "text_end", contentIndex: textIndex, content: message, partial: assistantMessage });
   stream.push({ type: "done", reason: "stop", message: assistantMessage });
 }
 
