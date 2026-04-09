@@ -18,6 +18,7 @@ import {
   destroyAllSessions,
 } from "./session-map.js";
 import { createTmuxClaudeStreamFn, extractNewUserMessages } from "./stream-fn.js";
+import { ClaudeCodeAdapter } from "./adapters/claude-code.js";
 import type { TmuxClaudeConfig, SessionState } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
@@ -414,13 +415,14 @@ describe("acceptance: model selection", () => {
       tmuxSession: "test-tmux",
       workingDirectory: "/tmp/test-wd",
     };
+    const adapter = new ClaudeCodeAdapter();
 
-    const session1 = await getOrCreateSession("interrupt-test", "sonnet-4.6", config);
+    const session1 = await getOrCreateSession("interrupt-test", "sonnet-4.6", config, adapter);
     session1.claudeSessionId = "int-123";
     sessionCreated = true;
     processingCallCount = 0;
 
-    await getOrCreateSession("interrupt-test", "opus-4.6", config);
+    await getOrCreateSession("interrupt-test", "opus-4.6", config, adapter);
 
     const cmds = getCmds();
     expect(cmds.some((c) => c.includes("send-keys") && c.includes("Escape") && !c.includes("-l"))).toBe(true);

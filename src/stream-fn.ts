@@ -3,8 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
  * Custom StreamFn implementation for the tmux-cc provider.
  *
  * This StreamFn extracts new user messages from OpenClaw's context,
- * sends them to Claude Code via tmux send-keys, polls the JSONL
- * transcript for the response, and emits AssistantMessageEventStream events.
+ * sends them to the agent via tmux send-keys, polls the transcript
+ * for the response, and emits AssistantMessageEventStream events.
+ *
+ * Agent-specific logic (transcript parsing, process detection, etc.)
+ * is delegated to an {@link AgentAdapter}.
  */
 import { writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -17,24 +20,34 @@ import type {
   TextContent,
   UserMessage,
 } from "@mariozechner/pi-ai";
+import type { AgentAdapter } from "./adapters/types.js";
 import { getOrCreateSession, restartSession } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
-import { sendKeys, sendTmuxKey, isProcessAlive, isWindowReady, isClaudeProcessing, capturePane, readExitCode, killWindow, readCrashLog, cleanupCrashLog } from "./tmux-manager.js";
+import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
+// Transcript-reader imports used as fallback when no adapter is provided
 import {
-  readNewEntries,
-  extractAssistantResponse,
-  findLatestTranscript,
-  findNewTranscript,
-  findGrowingTranscript,
-  findTranscriptBySessionId,
-  extractSessionId,
+  readNewEntries as trReadNewEntries,
+  extractAssistantResponse as trExtractResponse,
+  findTranscriptBySessionId as trFindBySessionId,
+  findNewTranscript as trFindNew,
+  findGrowingTranscript as trFindGrowing,
+  findLatestTranscript as trFindLatest,
+  extractSessionId as trExtractSessionId,
 } from "./transcript-reader.js";
+// tmux-manager CC-specific fallbacks
+import {
+  isProcessAlive as tmuxIsProcessAlive,
+  isClaudeProcessing as tmuxIsClaudeProcessing,
+  readExitCode as tmuxReadExitCode,
+} from "./tmux-manager.js";
 import type { TmuxClaudeConfig, SessionState, AssistantResponse, TranscriptEntry } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 export interface StreamFnOptions {
   /** Plugin configuration. */
   config: TmuxClaudeConfig;
+  /** Agent adapter for agent-specific operations. */
+  adapter?: AgentAdapter;
 }
 
 /**
@@ -85,6 +98,7 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
  */
 export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
   const config = { ...DEFAULT_CONFIG, ...opts.config };
+  const adapter = opts.adapter;
 
   return (_model: unknown, context: Context, options?: { sessionId?: string }) => {
     const stream = createAssistantMessageEventStream();
@@ -119,8 +133,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // its own context files (CLAUDE.md, MEMORY.md) directly.
         const finalText = stripBootstrapWarnings(rawText);
 
-        // Step 4: Get or create the Claude Code session
-        const session = await getOrCreateSession(sessionKey, config.defaultModel, config);
+        // Step 4: Get or create the agent session
+        const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter);
         cancelSession = session;
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 
@@ -130,11 +144,13 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           return;
         }
 
-        // Step 5: Ensure Claude Code process is alive
-        if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
+        // Step 5: Ensure agent process is alive
+        const aliveCheck = adapter
+          ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+          : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+        if (!aliveCheck) {
           console.error(`[tmux-cc] process not alive in window=${session.windowName}`);
-          // Session will be restarted by getOrCreateSession on next call
-          emitTextResponse(stream, "REDACTEDÔREDACTED Claude Code process failed to start. Please retry.");
+          emitTextResponse(stream, "REDACTEDÔREDACTED Agent process failed to start. Please retry.");
           return;
         }
 
@@ -241,17 +257,23 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           }
         };
 
-        // Step 8: Poll JSONL transcript for response
-        let response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries, () => cancelled);
+        // Step 8: Poll transcript for response
+        let response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled);
 
-        // Step 8.5: If CC died (no response or incomplete response), restart and retry once.
-        if (!response && !(await isProcessAlive(config.tmuxSession, session.windowName))) {
-          console.log(`[tmux-cc] CC died, restarting with --resume`);
-          await restartSession(session, config);
+        // Step 8.5: If agent died (no response), restart and retry once.
+        const aliveAfterPoll = adapter
+          ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+          : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+        if (!response && !aliveAfterPoll) {
+          console.log(`[tmux-cc] agent died, restarting with --resume`);
+          await restartSession(session, config, adapter);
 
-          if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
-            console.error(`[tmux-cc] restart failed, CC still not alive`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed and could not be restarted. Please retry.", thinkingStartEmitted, session.model);
+          const aliveAfterRestart = adapter
+            ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+            : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+          if (!aliveAfterRestart) {
+            console.error(`[tmux-cc] restart failed, agent still not alive`);
+            emitStreamClose(stream, "REDACTEDÔREDACTED Agent process crashed and could not be restarted. Please retry.", thinkingStartEmitted, session.model);
             return;
           }
 
@@ -261,18 +283,20 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           await sendKeys(config.tmuxSession, session.windowName, finalText);
 
-          response = await pollForResponse(session, offsetBeforeSend, config, onNewEntries, () => cancelled);
+          response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled);
         }
 
         if (!response) {
-          const ccAlive = await isProcessAlive(config.tmuxSession, session.windowName);
+          const ccAlive = adapter
+            ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+            : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
-            console.error(`[tmux-cc] CC crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code process crashed. Please retry.", thinkingStartEmitted, session.model);
+            console.error(`[tmux-cc] agent crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
+            emitStreamClose(stream, "REDACTEDÔREDACTED Agent process crashed. Please retry.", thinkingStartEmitted, session.model);
             await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            emitStreamClose(stream, "REDACTEDÔREDACTED Claude Code response timed out. Please retry.", thinkingStartEmitted, session.model);
+            emitStreamClose(stream, "REDACTEDÔREDACTED Agent response timed out. Please retry.", thinkingStartEmitted, session.model);
           }
           return;
         }
@@ -552,6 +576,7 @@ async function pollForResponse(
   session: SessionState,
   offsetBeforeSend: number,
   config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
   onNewEntries?: (allEntries: TranscriptEntry[]) => void,
   isCancelled?: () => boolean,
 ): Promise<AssistantResponse | null> {
@@ -583,7 +608,7 @@ async function pollForResponse(
 
     if (!session.transcriptPath) {
       // Try to discover the transcript file
-      updateTranscriptPath(session, config.workingDirectory);
+      updateTranscriptPath(session, config.workingDirectory, adapter);
       if (!session.transcriptPath) {
         // Log discovery failures periodically (every 5s)
         const now = Date.now();
@@ -591,39 +616,46 @@ async function pollForResponse(
           console.log(`[tmux-cc] poll #${pollCount}: transcript not discovered yet, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
           lastLogTime = now;
 
-          // Check if CC process died before writing any transcript
-          if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
-            const exitCode = await readExitCode(config.tmuxSession, session.windowName);
+          // Check if agent process died before writing any transcript
+          const processAlive = adapter
+            ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+            : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+          if (!processAlive) {
+            const exitCode = await tmuxReadExitCode(config.tmuxSession, session.windowName);
             const paneContent = await capturePane(config.tmuxSession, session.windowName, 30);
             const crashLog = await readCrashLog(session.windowName, 50);
-            console.error(`[tmux-cc] poll #${pollCount}: CC died before transcript. exitCode=${exitCode ?? "unknown"}`);
+            console.error(`[tmux-cc] poll #${pollCount}: agent died before transcript. exitCode=${exitCode ?? "unknown"}`);
             if (paneContent) {
-              console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+              console.error(`[tmux-cc] agent pane content (last 30 lines):\n${paneContent}`);
             }
             if (crashLog && !paneContent) {
-              console.error(`[tmux-cc] CC crash log (last 50 lines):\n${crashLog}`);
+              console.error(`[tmux-cc] agent crash log (last 50 lines):\n${crashLog}`);
             }
             return null;
           }
 
-          // CC may be stuck on bypass permissions or trust prompt after waitForReady timeout
-          try {
-            const content = await capturePane(config.tmuxSession, session.windowName, 20);
-            if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
-              await sleep(300);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("I trust this folder")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("[Pasted text #")) {
-              // CC received the paste but hasn't started processing (v2.1.96+)
-              console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+          // Handle agent-specific blocking prompts via adapter
+          if (adapter) {
+            await adapter.handleBlockingPrompts(config.tmuxSession, session.windowName);
+          } else {
+            // Legacy fallback: check for CC-specific prompts inline
+            try {
+              const content = await capturePane(config.tmuxSession, session.windowName, 20);
+              if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
+                console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
+                await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
+                await sleep(300);
+                await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              } else if (content?.includes("I trust this folder")) {
+                console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
+                await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              } else if (content?.includes("[Pasted text #")) {
+                console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
+                await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              }
+            } catch {
+              // Ignore errors from prompt check
             }
-          } catch {
-            // Ignore errors from prompt check
           }
         }
         await sleep(config.pollingIntervalMs);
@@ -639,29 +671,29 @@ async function pollForResponse(
       }
     }
 
-    const result = readNewEntries(session.transcriptPath, currentOffset);
+    const result = adapter
+      ? adapter.readNewEntries(session.transcriptPath, currentOffset)
+      : trReadNewEntries(session.transcriptPath, currentOffset);
     currentOffset = result.newOffset;
     session.transcriptOffset = currentOffset;
 
     if (result.entries.length > 0) {
-      // Activity detected REDACTED extend the deadline so long-running tool-call
-      // chains don't time out while Claude Code is still making progress.
+      // Activity detected REDACTED extend the deadline
       deadline = Date.now() + config.responseTimeoutMs;
-      // Also update lastActivityMs so idle cleanup won't kill this session
       session.lastActivityMs = Date.now();
-      // Accumulate entries for streaming callback
       allEntries.push(...result.entries);
       onNewEntries?.(allEntries);
 
       const entryTypes = result.entries.map(e => e.type).join(",");
       console.log(`[tmux-cc] poll #${pollCount}: ${result.entries.length} new entries [${entryTypes}], offset now=${currentOffset}`);
 
-      const response = extractAssistantResponse(result.entries);
+      const response = adapter
+        ? adapter.extractAssistantResponse(result.entries)
+        : trExtractResponse(result.entries);
 
       // Update session ID if discovered
       if (response.sessionId && !session.claudeSessionId) {
         session.claudeSessionId = response.sessionId;
-        // Persist to disk so we can resume after gateway + window restart
         persistSession(session.sessionKey, response.sessionId, session.model);
       }
 
@@ -670,68 +702,66 @@ async function pollForResponse(
         return response;
       }
 
-      // Fallback: Claude Code sometimes writes stop_reason: null even
-      // for final responses. Check the tmux pane status line REDACTED if Claude
-      // Code is NOT actively processing (no "esc to interrupt" visible),
-      // treat the current text as the final response.
-      // Note: REDACTED is always visible in Claude Code's TUI, so we cannot
-      // use isWindowReady() for idle detection.
+      // Fallback: agent wrote stop_reason: null REDACTED check if idle
       if (!response.isComplete && response.text) {
-        if (!(await isClaudeProcessing(config.tmuxSession, session.windowName))) {
-          console.log(`[tmux-cc] poll #${pollCount}: CC not processing, treating as complete. textLen=${response.text.length}`);
+        const stillProcessing = adapter
+          ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+          : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+        if (!stillProcessing) {
+          console.log(`[tmux-cc] poll #${pollCount}: agent not processing, treating as complete. textLen=${response.text.length}`);
           response.isComplete = true;
           return response;
         }
       }
     } else {
-      // No new entries REDACTED check if Claude Code finished but wrote
-      // stop_reason: null (common quirk).  If we have accumulated text
-      // from a previous poll and CC is no longer processing, treat it
-      // as complete.
+      // No new entries REDACTED check if agent finished with stop_reason: null
       if (allEntries.length > 0) {
-        const pendingResponse = extractAssistantResponse(allEntries);
+        const pendingResponse = adapter
+          ? adapter.extractAssistantResponse(allEntries)
+          : trExtractResponse(allEntries);
         if (pendingResponse.text && !pendingResponse.isComplete) {
-          if (!(await isClaudeProcessing(config.tmuxSession, session.windowName))) {
-            console.log(`[tmux-cc] poll #${pollCount}: no new entries, CC idle with pending text. textLen=${pendingResponse.text.length}`);
+          const stillProcessing = adapter
+            ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+            : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+          if (!stillProcessing) {
+            console.log(`[tmux-cc] poll #${pollCount}: no new entries, agent idle with pending text. textLen=${pendingResponse.text.length}`);
             pendingResponse.isComplete = true;
             return pendingResponse;
           }
         }
       }
 
-      // Check if Claude Code exited (window gone or process dead).
-      // When it exits mid-turn the transcript stops growing, so we'd
-      // otherwise spin here until the timeout.
-      if (!(await isProcessAlive(config.tmuxSession, session.windowName))) {
-        // Capture crash diagnostics before anything else
-        const exitCode = await readExitCode(config.tmuxSession, session.windowName);
+      // Check if agent exited (window gone or process dead)
+      const processAlive = adapter
+        ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+        : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+      if (!processAlive) {
+        const exitCode = await tmuxReadExitCode(config.tmuxSession, session.windowName);
         const paneContent = await capturePane(config.tmuxSession, session.windowName, 30);
         const crashLog = await readCrashLog(session.windowName, 50);
-        console.error(`[tmux-cc] poll #${pollCount}: CC process died. exitCode=${exitCode ?? "unknown"}`);
+        console.error(`[tmux-cc] poll #${pollCount}: agent process died. exitCode=${exitCode ?? "unknown"}`);
         if (paneContent) {
-          console.error(`[tmux-cc] CC pane content (last 30 lines):\n${paneContent}`);
+          console.error(`[tmux-cc] agent pane content (last 30 lines):\n${paneContent}`);
         }
         if (crashLog && !paneContent) {
-          console.error(`[tmux-cc] CC crash log (last 50 lines):\n${crashLog}`);
+          console.error(`[tmux-cc] agent crash log (last 50 lines):\n${crashLog}`);
         }
 
         console.log(`[tmux-cc] re-reading full response from offset ${effectiveOffsetBeforeSend}`);
-        // Re-read ALL entries since the message was sent to capture
-        // any partial assistant text written before the exit.
-        // Use collectAllText to gather text from ALL assistant entries,
-        // not just the last one (which might be a tool_use with no text).
-        const fullResult = readNewEntries(session.transcriptPath, effectiveOffsetBeforeSend);
-        const response = extractAssistantResponse(fullResult.entries, { collectAllText: true });
+        const fullResult = adapter
+          ? adapter.readNewEntries(session.transcriptPath, effectiveOffsetBeforeSend)
+          : trReadNewEntries(session.transcriptPath, effectiveOffsetBeforeSend);
+        const response = adapter
+          ? adapter.extractAssistantResponse(fullResult.entries, { collectAllText: true })
+          : trExtractResponse(fullResult.entries, { collectAllText: true });
         if (response.text && response.isComplete) {
-          // CC completed its response (has stop_reason) then exited REDACTED valid response
-          console.log(`[tmux-cc] poll #${pollCount}: CC died after completing response. textLen=${response.text.length}`);
+          console.log(`[tmux-cc] poll #${pollCount}: agent died after completing response. textLen=${response.text.length}`);
           return response;
         }
         if (response.text) {
-          // CC died mid-response (no stop_reason) REDACTED treat as crash, return null to trigger retry
-          console.log(`[tmux-cc] poll #${pollCount}: CC died mid-response (incomplete). textLen=${response.text.length}, discarding`);
+          console.log(`[tmux-cc] poll #${pollCount}: agent died mid-response (incomplete). textLen=${response.text.length}, discarding`);
         } else {
-          console.error(`[tmux-cc] poll #${pollCount}: CC died with no response text`);
+          console.error(`[tmux-cc] poll #${pollCount}: agent died with no response text`);
         }
         return null;
       }
@@ -755,13 +785,15 @@ async function pollForResponse(
  * Strategy 2 uses the snapshot's file size as the starting offset so we
  * skip old entries and only read new content.
  */
-function updateTranscriptPath(session: SessionState, workingDirectory: string): void {
+function updateTranscriptPath(session: SessionState, workingDirectory: string, adapter?: AgentAdapter): void {
   // Strategy 0: when we know the claudeSessionId (resuming a persisted
-  // session), look directly for <sessionId>.jsonl.  This avoids picking
+  // session), look directly for <sessionId>.jsonl.
   // up a transcript created by a *different* CC session that happens to
   // share the same project directory.
   if (session.claudeSessionId) {
-    const knownPath = findTranscriptBySessionId(workingDirectory, session.claudeSessionId);
+    const knownPath = adapter
+      ? adapter.findTranscriptBySessionId(workingDirectory, session.claudeSessionId)
+      : trFindBySessionId(workingDirectory, session.claudeSessionId);
     if (knownPath) {
       const snapshotSize = session.existingTranscriptPaths?.get(knownPath);
       if (snapshotSize != null) {
@@ -783,13 +815,17 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
 
   if (session.existingTranscriptPaths) {
     // Strategy 1: new file not in snapshot
-    const newPath = findNewTranscript(workingDirectory, session.existingTranscriptPaths);
+    const newPath = adapter
+      ? adapter.findNewTranscript(workingDirectory, session.existingTranscriptPaths)
+      : trFindNew(workingDirectory, session.existingTranscriptPaths);
     if (newPath) {
       console.log(`[tmux-cc] updateTranscriptPath: strategy 1 (new file) found: ${newPath}`);
       session.transcriptPath = newPath;
       session.transcriptOffset = 0;
       if (!session.claudeSessionId) {
-        session.claudeSessionId = extractSessionId(newPath);
+        session.claudeSessionId = adapter
+          ? adapter.extractSessionId(newPath)
+          : trExtractSessionId(newPath);
         if (session.claudeSessionId) {
           persistSession(session.sessionKey, session.claudeSessionId, session.model);
         }
@@ -799,13 +835,17 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
     }
 
     // Strategy 2: existing file whose size grew since snapshot
-    const growing = findGrowingTranscript(workingDirectory, session.existingTranscriptPaths);
+    const growing = adapter
+      ? adapter.findGrowingTranscript(workingDirectory, session.existingTranscriptPaths)
+      : trFindGrowing(workingDirectory, session.existingTranscriptPaths);
     if (growing) {
       console.log(`[tmux-cc] updateTranscriptPath: strategy 2 (growing file) found: ${growing.path}, snapshotSize=${growing.snapshotSize}`);
       session.transcriptPath = growing.path;
       session.transcriptOffset = growing.snapshotSize;
       if (!session.claudeSessionId) {
-        session.claudeSessionId = extractSessionId(growing.path);
+        session.claudeSessionId = adapter
+          ? adapter.extractSessionId(growing.path)
+          : trExtractSessionId(growing.path);
         if (session.claudeSessionId) {
           persistSession(session.sessionKey, session.claudeSessionId, session.model);
         }
@@ -814,17 +854,21 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string): 
       return;
     }
 
-    // Neither found yet REDACTED keep waiting for Claude Code to start writing
+    // Neither found yet REDACTED keep waiting for agent to start writing
     return;
   }
 
   // Normal case (no snapshot): use latest file
-  const path = findLatestTranscript(workingDirectory);
+  const path = adapter
+    ? adapter.findLatestTranscript(workingDirectory)
+    : trFindLatest(workingDirectory);
   if (path) {
     console.log(`[tmux-cc] updateTranscriptPath: no snapshot, using latest: ${path}`);
     session.transcriptPath = path;
     if (!session.claudeSessionId) {
-      session.claudeSessionId = extractSessionId(path);
+      session.claudeSessionId = adapter
+        ? adapter.extractSessionId(path)
+        : trExtractSessionId(path);
       if (session.claudeSessionId) {
         persistSession(session.sessionKey, session.claudeSessionId, session.model);
       }

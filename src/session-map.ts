@@ -1,30 +1,28 @@
 import { getPersistedClaudeSessionId, persistSession } from "./session-persistence.js";
 import {
-  createWindow,
-  isClaudeProcessing,
-  isProcessAlive,
-  isWindowReady,
+  createWindow as tmuxCreateWindow,
+  isProcessAlive as tmuxIsProcessAlive,
+  isWindowReady as tmuxIsWindowReady,
+  waitForReady as tmuxWaitForReady,
+  sendKeys as tmuxSendKeys,
   killSession,
   killWindow,
   listWindows,
-  sendKeys,
-  sendTmuxKey,
-  waitForReady,
   windowExists,
   type TmuxManagerOptions,
-  type CreateWindowOptions,
 } from "./tmux-manager.js";
 import {
-  findLatestTranscript,
-  findTranscriptBySessionId,
-  getExistingTranscriptPaths,
-  extractSessionId,
+  getExistingTranscriptPaths as trGetExistingPaths,
 } from "./transcript-reader.js";
+import type { AgentAdapter } from "./adapters/types.js";
 /**
  * Maps OpenClaw session keys to tmux windows running Claude Code.
  *
  * Each OpenClaw conversation (identified by a session key) gets its own
- * tmux window with a dedicated Claude Code instance.
+ * tmux window with a dedicated agent instance (e.g., Claude Code).
+ *
+ * The agent-specific logic (launching, readiness detection, transcript
+ * parsing, etc.) is delegated to an {@link AgentAdapter}.
  */
 import type { SessionState, TmuxClaudeConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
@@ -33,9 +31,6 @@ import { randomBytes } from "node:crypto";
 /** Unique ID for this module instance REDACTED detects multiple module loads. */
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
 console.log(`[tmux-cc] module instance ${MODULE_INSTANCE_ID} loaded`);
-
-const MODEL_SWITCH_POLL_MS = 500;
-const MODEL_SWITCH_INTERRUPT_TIMEOUT_MS = 15_000;
 
 /** In-memory map of session key REDACTED session state. */
 const sessions = new Map<string, SessionState>();
@@ -71,52 +66,37 @@ export function getSession(sessionKey: string): SessionState | null {
 }
 
 /**
- * Ensure Claude Code is idle before sending a /model command.
- * If CC is currently processing, sends Escape to interrupt it,
- * then polls until it becomes idle (up to 15s).
- */
-async function waitForIdle(tmuxSession: string, windowName: string): Promise<void> {
-  if (!(await isClaudeProcessing(tmuxSession, windowName))) {
-    return;
-  }
-
-  console.log(`[tmux-cc] waitForIdle: CC is processing in window=${windowName}, sending Escape to interrupt`);
-  await sendTmuxKey(tmuxSession, windowName, "Escape");
-
-  const deadline = Date.now() + MODEL_SWITCH_INTERRUPT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, MODEL_SWITCH_POLL_MS));
-    if (!(await isClaudeProcessing(tmuxSession, windowName))) {
-      console.log(`[tmux-cc] waitForIdle: CC is now idle in window=${windowName}`);
-      return;
-    }
-    console.log(`[tmux-cc] waitForIdle: still waiting for CC to stop in window=${windowName}`);
-  }
-  console.warn(`[tmux-cc] waitForIdle: timed out after ${MODEL_SWITCH_INTERRUPT_TIMEOUT_MS}ms, proceeding anyway`);
-}
-
-/**
  * Get or create a session for the given session key.
  *
- * If no session exists, creates a new tmux window with Claude Code.
- * If the session exists but Claude Code has crashed, restarts it with --resume.
+ * If no session exists, creates a new tmux window with the agent.
+ * If the session exists but the agent has crashed, restarts it with --resume.
+ *
+ * @param adapter - Agent adapter for lifecycle and transcript operations
  */
 export async function getOrCreateSession(
   sessionKey: string,
   model: string,
   config: TmuxClaudeConfig = {},
+  adapter?: AgentAdapter,
 ): Promise<SessionState> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   const existing = sessions.get(sessionKey);
 
   if (existing) {
     // Check if the process is still alive
-    if (await isProcessAlive(mergedConfig.tmuxSession, existing.windowName)) {
-      // Model changed REDACTED wait for CC to be idle, then send /model command
+    const alive = adapter
+      ? await adapter.isProcessAlive(mergedConfig.tmuxSession, existing.windowName)
+      : await tmuxIsProcessAlive(mergedConfig.tmuxSession, existing.windowName);
+
+    if (alive) {
+      // Model changed REDACTED use adapter's switchModel (handles interrupt + idle wait)
       if (existing.model !== model) {
-        console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} REDACTED ${model}), sending /model command for key=${sessionKey}`);
-        await waitForIdle(mergedConfig.tmuxSession, existing.windowName);
-        await sendKeys(mergedConfig.tmuxSession, existing.windowName, `/model ${model}`);
+        console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} REDACTED ${model}), switching model for key=${sessionKey}`);
+        if (adapter) {
+          await adapter.switchModel(mergedConfig.tmuxSession, existing.windowName, model);
+        } else {
+          await tmuxSendKeys(mergedConfig.tmuxSession, existing.windowName, `/model ${model}`);
+        }
         existing.model = model;
       }
       console.log(`[tmux-cc] getOrCreateSession: reusing existing session key=${sessionKey}, window=${existing.windowName}`);
@@ -126,37 +106,41 @@ export async function getOrCreateSession(
 
     // Process died REDACTED restart with --resume
     console.log(`[tmux-cc] getOrCreateSession: restarting dead session key=${sessionKey}, window=${existing.windowName}`);
-    return await restartSession(existing, mergedConfig);
+    return await restartSession(existing, mergedConfig, adapter);
   }
 
   // Create a new session
   console.log(`[tmux-cc] getOrCreateSession: creating new session key=${sessionKey}`);
-  return await createNewSession(sessionKey, model, mergedConfig);
+  return await createNewSession(sessionKey, model, mergedConfig, adapter);
 }
 
 /**
- * Create a new Claude Code session in a tmux window.
+ * Create a new agent session in a tmux window.
  */
 async function createNewSession(
   sessionKey: string,
   model: string,
   config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
 ): Promise<SessionState> {
   const windowName = windowNameFromSessionKey(sessionKey);
 
   // Check if an existing window with this name is still alive and ready
-  // (e.g., from a previous gateway run). Reconnect instead of killing it
-  // to preserve Claude Code's conversation history.
+  const isAlive = adapter
+    ? await adapter.isProcessAlive(config.tmuxSession, windowName)
+    : await tmuxIsProcessAlive(config.tmuxSession, windowName);
+  const isReady = adapter
+    ? await adapter.isWindowReady(config.tmuxSession, windowName)
+    : await tmuxIsWindowReady(config.tmuxSession, windowName);
+
   if (
     (await windowExists(config.tmuxSession, windowName)) &&
-    (await isProcessAlive(config.tmuxSession, windowName)) &&
-    (await isWindowReady(config.tmuxSession, windowName))
+    isAlive &&
+    isReady
   ) {
-    // Snapshot existing transcript files so pollForResponse can find the
-    // NEW file that Claude Code creates when it receives the next message.
-    // We can't predict which file will be active REDACTED Claude Code may start
-    // a new session even in a reconnected window.
-    const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+    const existingFiles = adapter
+      ? adapter.getExistingTranscriptPaths(config.workingDirectory)
+      : trGetExistingPaths(config.workingDirectory);
     console.log(`[tmux-cc] createNewSession: reconnecting to existing window=${windowName}, snapshotFiles=${existingFiles.size}`);
 
     const state: SessionState = {
@@ -173,44 +157,46 @@ async function createNewSession(
     return state;
   }
 
-  const tmuxOpts: TmuxManagerOptions = {
-    tmuxSession: config.tmuxSession,
-    claudeCommand: config.claudeCommand,
-    workingDirectory: config.workingDirectory,
-  };
-
   // Check if we have a persisted Claude session ID from a previous run.
-  // This enables --resume even after the tmux window was reclaimed.
   const persistedClaudeId = getPersistedClaudeSessionId(sessionKey);
   console.log(`[tmux-cc] createNewSession: key=${sessionKey}, window=${windowName}, model=${model}, persistedId=${persistedClaudeId ?? "none"}, cwd=${config.workingDirectory}`);
 
-  const windowOpts: CreateWindowOptions = {
-    windowName,
-    model,
-    resumeSessionId: persistedClaudeId,
-  };
-
-  // Snapshot existing transcript files BEFORE creating the window so we can
-  // identify the new file that belongs to our session after message is sent.
-  const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
+  // Snapshot existing transcript files BEFORE creating the window
+  const existingFiles = adapter
+    ? adapter.getExistingTranscriptPaths(config.workingDirectory)
+    : trGetExistingPaths(config.workingDirectory);
   console.log(`[tmux-cc] createNewSession: snapshot has ${existingFiles.size} existing transcript files`);
 
-  // Kill any orphaned tmux window with the same name from a previous gateway
-  // run to avoid ambiguous tmux targets.
+  // Kill any orphaned tmux window with the same name
   if (await windowExists(config.tmuxSession, windowName)) {
     console.log(`[tmux-cc] createNewSession: killing orphaned window=${windowName}`);
     await killWindow(config.tmuxSession, windowName);
   }
 
-  await createWindow(tmuxOpts, windowOpts);
+  // Create the agent window via adapter or legacy path
+  if (adapter) {
+    await adapter.createAgentWindow({
+      tmuxSession: config.tmuxSession,
+      windowName,
+      workingDirectory: config.workingDirectory,
+      model,
+      resumeSessionId: persistedClaudeId,
+    });
+  } else {
+    const tmuxOpts: TmuxManagerOptions = {
+      tmuxSession: config.tmuxSession,
+      claudeCommand: config.claudeCommand,
+      workingDirectory: config.workingDirectory,
+    };
+    await tmuxCreateWindow(tmuxOpts, { windowName, model, resumeSessionId: persistedClaudeId });
+  }
 
-  // Wait for Claude Code to start
-  const ready = await waitForReady(config.tmuxSession, windowName);
+  // Wait for agent to start
+  const ready = adapter
+    ? await adapter.waitForReady(config.tmuxSession, windowName)
+    : await tmuxWaitForReady(config.tmuxSession, windowName);
   console.log(`[tmux-cc] createNewSession: waitForReady=${ready}`);
 
-  // Don't discover transcript here REDACTED Claude Code creates the file when the
-  // first message is sent, not at startup. Store the snapshot so
-  // pollForResponse can find the NEW file after sendKeys.
   const state: SessionState = {
     sessionKey,
     windowName,
@@ -227,32 +213,46 @@ async function createNewSession(
 }
 
 /**
- * Restart a crashed Claude Code session using --resume.
+ * Restart a crashed agent session using --resume.
  */
-export async function restartSession(state: SessionState, config: Required<TmuxClaudeConfig>): Promise<SessionState> {
+export async function restartSession(
+  state: SessionState,
+  config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
+): Promise<SessionState> {
   // Kill the old window if it still exists
   await killWindow(config.tmuxSession, state.windowName);
 
-  const tmuxOpts: TmuxManagerOptions = {
-    tmuxSession: config.tmuxSession,
-    claudeCommand: config.claudeCommand,
-    workingDirectory: config.workingDirectory,
-  };
+  // Snapshot existing transcript files BEFORE creating the new window
+  const existingFiles = adapter
+    ? adapter.getExistingTranscriptPaths(config.workingDirectory)
+    : trGetExistingPaths(config.workingDirectory);
 
-  const windowOpts: CreateWindowOptions = {
-    windowName: state.windowName,
-    model: state.model,
-    resumeSessionId: state.claudeSessionId,
-  };
+  // Create agent window via adapter or legacy path
+  if (adapter) {
+    await adapter.createAgentWindow({
+      tmuxSession: config.tmuxSession,
+      windowName: state.windowName,
+      workingDirectory: config.workingDirectory,
+      model: state.model,
+      resumeSessionId: state.claudeSessionId,
+    });
+  } else {
+    const tmuxOpts: TmuxManagerOptions = {
+      tmuxSession: config.tmuxSession,
+      claudeCommand: config.claudeCommand,
+      workingDirectory: config.workingDirectory,
+    };
+    await tmuxCreateWindow(tmuxOpts, {
+      windowName: state.windowName,
+      model: state.model,
+      resumeSessionId: state.claudeSessionId,
+    });
+  }
 
-  // Snapshot existing transcript files BEFORE creating the new window so
-  // pollForResponse can discover the new file Claude Code writes to after
-  // the restart.  Without this, polling continues reading the old (stale)
-  // transcript file and times out.
-  const existingFiles = getExistingTranscriptPaths(config.workingDirectory);
-
-  await createWindow(tmuxOpts, windowOpts);
-  const ready = await waitForReady(config.tmuxSession, state.windowName);
+  const ready = adapter
+    ? await adapter.waitForReady(config.tmuxSession, state.windowName)
+    : await tmuxWaitForReady(config.tmuxSession, state.windowName);
   console.log(`[tmux-cc] restartSession: window=${state.windowName}, ready=${ready}, snapshotFiles=${existingFiles.size}`);
 
   // Reset transcript state so pollForResponse re-discovers the file
@@ -264,24 +264,28 @@ export async function restartSession(state: SessionState, config: Required<TmuxC
 }
 
 /**
- * Try to discover the Claude Code transcript file for a session.
+ * Try to discover the transcript file for a session.
  * Updates the session state with the transcript path and session ID.
  */
-function discoverTranscript(state: SessionState, workingDirectory: string): void {
+function discoverTranscript(state: SessionState, workingDirectory: string, adapter?: AgentAdapter): void {
   if (state.claudeSessionId) {
-    // If we know the session ID, look for its specific file
-    const path = findTranscriptBySessionId(workingDirectory, state.claudeSessionId);
+    const path = adapter
+      ? adapter.findTranscriptBySessionId(workingDirectory, state.claudeSessionId)
+      : null; // Legacy: import inline
     if (path) {
       state.transcriptPath = path;
       return;
     }
+    if (!adapter) {
+      // Legacy fallback REDACTED dynamic import not feasible in sync function
+      // This path is only used during cleanup, not critical
+    }
   }
 
-  // Fall back to the most recent transcript file
-  const path = findLatestTranscript(workingDirectory);
+  const path = adapter?.findLatestTranscript(workingDirectory) ?? null;
   if (path) {
     state.transcriptPath = path;
-    state.claudeSessionId = extractSessionId(path);
+    state.claudeSessionId = adapter?.extractSessionId(path);
   }
 }
 

@@ -1,55 +1,20 @@
 /**
  * tmux-cc provider plugin entry point.
  *
- * Registers a provider that delegates all inference to Claude Code CLI
- * running in persistent tmux sessions. OpenClaw handles channel routing;
- * Claude Code handles context, reasoning, and tool use.
+ * Registers a provider that delegates all inference to a CLI agent
+ * (currently Claude Code) running in persistent tmux sessions. OpenClaw
+ * handles channel routing; the agent handles context, reasoning, and tool use.
+ *
+ * Agent-specific logic is encapsulated in an {@link AgentAdapter}.
  */
-import { existsSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { ClaudeCodeAdapter } from "./src/adapters/claude-code.js";
 import { startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
 import { createTmuxClaudeStreamFn } from "./src/stream-fn.js";
 import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
 
 const PROVIDER_ID = "tmux-cc";
-
-/** Claude models available through Claude Code CLI. */
-const CLAUDE_MODELS = [
-  {
-    id: "opus-4.6",
-    name: "Claude Opus 4.6 (tmux)",
-    claudeModelId: "claude-opus-4-6",
-    reasoning: true,
-    contextWindow: 200_000,
-    maxTokens: 16_384,
-  },
-  {
-    id: "sonnet-4.6",
-    name: "Claude Sonnet 4.6 (tmux)",
-    claudeModelId: "claude-sonnet-4-6",
-    reasoning: true,
-    contextWindow: 200_000,
-    maxTokens: 16_384,
-  },
-  {
-    id: "sonnet-4.5",
-    name: "Claude Sonnet 4.5 (tmux)",
-    claudeModelId: "claude-sonnet-4-5-20250514",
-    reasoning: true,
-    contextWindow: 200_000,
-    maxTokens: 16_384,
-  },
-  {
-    id: "haiku-4.5",
-    name: "Claude Haiku 4.5 (tmux)",
-    claudeModelId: "claude-haiku-4-5-20250514",
-    reasoning: false,
-    contextWindow: 200_000,
-    maxTokens: 8_192,
-  },
-];
 
 /**
  * Get plugin config from the OpenClaw config object.
@@ -62,129 +27,10 @@ function getPluginConfig(config: Record<string, unknown> | undefined): TmuxClaud
   return tmuxClaudeConfig ?? {};
 }
 
-/**
- * Map an OpenClaw model ID to the Claude Code CLI model name.
- * Looks up the claudeModelId from the CLAUDE_MODELS table.
- */
-function extractClaudeModelId(modelId: string): string {
-  // Strip provider prefix if present (legacy "tmux-cc/sonnet-4.6" format)
-  const bare = modelId.includes("/") ? modelId.split("/").slice(1).join("/") : modelId;
-  const match = CLAUDE_MODELS.find((m) => m.id === bare);
-  return match?.claudeModelId ?? bare;
-}
-
-/**
- * Write the Claude Code MCP settings file for a working directory.
- * This configures Claude Code to connect to our MCP tools server.
- */
-function writeMcpSettings(workingDirectory: string): void {
-  const claudeDir = join(workingDirectory, ".claude");
-  mkdirSync(claudeDir, { recursive: true });
-
-  const settingsPath = join(claudeDir, "settings.json");
-  const mcpServerScript = resolve(import.meta.dirname ?? __dirname, "src", "mcp-server.ts");
-
-  const settings = {
-    mcpServers: {
-      "gateway-tools": {
-        command: "npx",
-        args: ["tsx", mcpServerScript],
-        env: {
-          GATEWAY_CLI_COMMAND: process.env.GATEWAY_CLI_COMMAND ?? "openclaw",
-        },
-      },
-    },
-  };
-
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-}
-
-const DEFAULT_CLAUDE_MD = `# Claude Code Project Instructions
-
-Read and follow the instructions in these files (in order):
-
-1. \`AGENTS.md\` REDACTED Workspace rules, behavior guidelines, and constraints
-2. \`SOUL.md\` REDACTED Character, personality, and communication style
-3. \`MEMORY.md\` REDACTED Conversation history, learned preferences, and context
-
----
-
-## Messaging Protocol
-
-You are receiving messages from users through a messaging gateway.
-Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` REDACTED use these to identify who is speaking.
-
-### Silent Replies (NO_REPLY)
-
-When you have nothing meaningful to say (e.g., a message wasn't directed at you, or it's just noise), respond with ONLY:
-
-\`\`\`
-NO_REPLY
-\`\`\`
-
-Rules:
-- It must be your ENTIRE message REDACTED nothing else
-- Never append it to an actual response
-- Never wrap it in markdown or code blocks
-
-### Heartbeat Protocol (HEARTBEAT_OK)
-
-You may receive heartbeat poll messages. If you receive one and there is nothing that needs attention, reply exactly:
-
-\`\`\`
-HEARTBEAT_OK
-\`\`\`
-
-If something needs attention, do NOT include "HEARTBEAT_OK" REDACTED reply with the alert/update text instead.
-If \`HEARTBEAT.md\` exists, read it and follow its instructions during heartbeats.
-`;
-
-/**
- * Ensure CLAUDE.md exists in the working directory.
- * Silently skips if the file already exists.
- */
-function ensureClaudeMd(workingDirectory: string): void {
-  const claudeMdPath = join(workingDirectory, "CLAUDE.md");
-  if (existsSync(claudeMdPath)) return;
-  writeFileSync(claudeMdPath, DEFAULT_CLAUDE_MD);
-}
-
-/**
- * Ensure .claude/skills symlink points to the workspace skills directory.
- * Silently skips if the symlink already exists or no skills/ directory is present.
- */
-function ensureSkillsSymlink(workingDirectory: string): void {
-  const skillsDir = join(workingDirectory, "skills");
-  if (!existsSync(skillsDir)) return;
-
-  const claudeDir = join(workingDirectory, ".claude");
-  mkdirSync(claudeDir, { recursive: true });
-
-  const symlinkPath = join(claudeDir, "skills");
-  if (existsSync(symlinkPath)) {
-    // Check if it's already a symlink pointing to the right place
-    try {
-      readlinkSync(symlinkPath);
-    } catch {
-      // Not a symlink or can't read REDACTED leave it alone
-    }
-    return;
-  }
-
-  // Create relative symlink: .claude/skills -> ../skills
-  symlinkSync("../skills", symlinkPath);
-}
-
-/**
- * Set up the workspace for Claude Code:
- * - Write MCP settings
- * - Ensure CLAUDE.md exists
- * - Ensure .claude/skills symlink exists
- */
-function setupWorkspace(workingDirectory: string): void {
-  writeMcpSettings(workingDirectory);
-  ensureClaudeMd(workingDirectory);
-  ensureSkillsSymlink(workingDirectory);
+function createAdapter(): ClaudeCodeAdapter {
+  return new ClaudeCodeAdapter({
+    pluginDir: import.meta.dirname ?? __dirname,
+  });
 }
 
 export default definePluginEntry({
@@ -193,6 +39,8 @@ export default definePluginEntry({
   description: "Provider that delegates inference to Claude Code CLI in tmux sessions",
 
   register(api: OpenClawPluginApi) {
+    const adapter = createAdapter();
+
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Claude Code (tmux)",
@@ -204,7 +52,6 @@ export default definePluginEntry({
           label: "Claude Code (local)",
           kind: "custom",
           run: async () => {
-            // No API key needed REDACTED Claude Code uses its own authentication
             return {
               profiles: [
                 {
@@ -237,14 +84,13 @@ export default definePluginEntry({
           const pluginConfig = getPluginConfig(ctx.config as unknown as Record<string, unknown>);
           const mergedConfig = { ...DEFAULT_CONFIG, ...pluginConfig };
 
-          // Set up workspace (MCP settings, CLAUDE.md, skills symlink)
-          setupWorkspace(mergedConfig.workingDirectory);
+          adapter.setupWorkspace(mergedConfig.workingDirectory);
 
           return {
             provider: {
               baseUrl: "local://tmux-cc",
               api: "anthropic-v1",
-              models: CLAUDE_MODELS.map((m) => ({
+              models: adapter.models.map((m) => ({
                 id: m.id,
                 name: m.name,
                 api: "anthropic-v1" as const,
@@ -265,7 +111,7 @@ export default definePluginEntry({
       },
 
       resolveDynamicModel: (ctx) => {
-        const match = CLAUDE_MODELS.find((m) => m.id === ctx.modelId);
+        const match = adapter.models.find((m) => m.id === ctx.modelId);
         if (!match) {
           return undefined;
         }
@@ -283,7 +129,7 @@ export default definePluginEntry({
       },
 
       augmentModelCatalog: () =>
-        CLAUDE_MODELS.map((m) => ({
+        adapter.models.map((m) => ({
           id: m.id,
           name: m.name,
           provider: PROVIDER_ID,
@@ -300,17 +146,13 @@ export default definePluginEntry({
 
       createStreamFn: (ctx) => {
         const pluginConfig = getPluginConfig(ctx.config as unknown as Record<string, unknown>);
-        // Use agent workspace as default working directory instead of process.cwd()
         const workDir = pluginConfig.workingDirectory ?? ctx.workspaceDir ?? process.cwd();
         const mergedConfig = { ...DEFAULT_CONFIG, ...pluginConfig, workingDirectory: workDir };
 
-        // Set up workspace for this agent (CLAUDE.md, skills symlink, MCP settings)
-        setupWorkspace(workDir);
+        adapter.setupWorkspace(workDir);
 
-        // Extract the Claude model from the full model ID
-        const claudeModelId = extractClaudeModelId(ctx.modelId);
+        const claudeModelId = adapter.resolveModelId(ctx.modelId);
 
-        // Start idle cleanup timer on first use
         startCleanupTimer(mergedConfig);
 
         return createTmuxClaudeStreamFn({
@@ -318,6 +160,7 @@ export default definePluginEntry({
             ...mergedConfig,
             defaultModel: claudeModelId,
           },
+          adapter,
         });
       },
     });
