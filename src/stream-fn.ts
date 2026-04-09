@@ -91,6 +91,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     // Cancellation signal REDACTED set when the consumer calls return() (e.g., /stop)
     let cancelled = false;
     let cancelSession: SessionState | null = null;
+    // Set when the stream has completed normally REDACTED prevents return() from sending Escape
+    let streamDone = false;
 
     const run = async () => {
       let streamStarted = false;
@@ -326,6 +328,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           message: assistantMessage,
         });
         console.log(`[tmux-cc] pushed: done REDACTED all stream events emitted`);
+        streamDone = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         console.error(`[tmux-cc] run() error:`, err);
@@ -334,6 +337,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         } else {
           emitError(stream, message);
         }
+        streamDone = true;
       }
     };
 
@@ -363,7 +367,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           }
         },
         async return(v?: unknown) {
-          console.log(`[tmux-cc] DIAG: return() called REDACTED setting cancelled flag`);
+          console.log(`[tmux-cc] DIAG: return() called REDACTED streamDone=${streamDone}`);
+          if (streamDone) {
+            // Normal iterator cleanup after stream completed REDACTED don't interrupt CC
+            return it.return?.(v) ?? { done: true as const, value: undefined };
+          }
           cancelled = true;
           // Interrupt CC if we have a session
           if (cancelSession) {
