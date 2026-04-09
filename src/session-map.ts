@@ -314,6 +314,56 @@ export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promis
 }
 
 /**
+ * Grace period before eager cleanup kills an idle session (ms).
+ * Shorter than idleTimeoutMs REDACTED this fires after a stream completes
+ * to reclaim sessions that won't receive new messages soon (e.g., cron one-shots).
+ */
+const EAGER_CLEANUP_GRACE_MS = 120_000; // 2 minutes
+
+/**
+ * Schedule eager cleanup for a session after its stream completes.
+ *
+ * After the grace period, if the session hasn't received new activity
+ * (i.e., lastActivityMs hasn't changed), we assume the conversation
+ * is done and kill the tmux window to free memory.
+ *
+ * This is critical on memory-constrained machines where many cron-triggered
+ * sessions can pile up and exhaust RAM+swap.
+ */
+export function scheduleEagerCleanup(
+  sessionKey: string,
+  config: TmuxClaudeConfig = {},
+): void {
+  const state = sessions.get(sessionKey);
+  if (!state) return;
+
+  const activityAtSchedule = state.lastActivityMs;
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+
+  const timer = setTimeout(async () => {
+    const current = sessions.get(sessionKey);
+    if (!current) return; // already cleaned up
+    if (current.lastActivityMs !== activityAtSchedule) {
+      // Session was active again REDACTED a new message arrived, skip cleanup
+      console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} has new activity, skipping`);
+      return;
+    }
+    console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} idle for ${EAGER_CLEANUP_GRACE_MS}ms after stream, killing window=${current.windowName}`);
+    try {
+      await killWindow(mergedConfig.tmuxSession, current.windowName);
+    } catch (e) {
+      console.error(`[tmux-cc] eagerCleanup: killWindow failed: ${e instanceof Error ? e.message : e}`);
+    }
+    sessions.delete(sessionKey);
+  }, EAGER_CLEANUP_GRACE_MS);
+
+  // Don't block process exit
+  if (timer.unref) {
+    timer.unref();
+  }
+}
+
+/**
  * The window name prefix used by this plugin.
  */
 const WINDOW_PREFIX = "cc-";

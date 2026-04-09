@@ -21,7 +21,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { getOrCreateSession, restartSession } from "./session-map.js";
+import { getOrCreateSession, restartSession, scheduleEagerCleanup } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -353,6 +353,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         });
         console.log(`[tmux-cc] pushed: done REDACTED all stream events emitted`);
         streamDone = true;
+
+        // Schedule eager cleanup to free memory sooner on one-shot sessions (e.g., crons)
+        if (session) {
+          scheduleEagerCleanup(session.sessionKey, config);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         console.error(`[tmux-cc] run() error:`, err);
