@@ -5,7 +5,8 @@
  * and index.ts workspace setup. This is a thin delegation layer; the original
  * implementation files remain unchanged.
  */
-import { existsSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentAdapter, AgentModelDef } from "./types.js";
 import type { TranscriptEntry, TranscriptReadResult, AssistantResponse } from "../types.js";
@@ -284,26 +285,32 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
   // REDACTED Private helpers REDACTED
 
-  private writeMcpSettings(workingDirectory: string): void {
-    const claudeDir = join(workingDirectory, ".claude");
-    mkdirSync(claudeDir, { recursive: true });
-
-    const settingsPath = join(claudeDir, "settings.json");
+  private writeMcpSettings(_workingDirectory: string): void {
+    const claudeJsonPath = join(homedir(), ".claude.json");
     const mcpServerScript = resolve(this.pluginDir, "src", "mcp-server.ts");
 
-    const settings = {
-      mcpServers: {
-        "gateway-tools": {
-          command: "tsx",
-          args: [mcpServerScript],
-          env: {
-            GATEWAY_CLI_COMMAND: process.env.GATEWAY_CLI_COMMAND ?? "openclaw",
-          },
-        },
+    // Read existing .claude.json (CC v2 stores MCP servers here)
+    let data: Record<string, unknown> = {};
+    try {
+      data = JSON.parse(readFileSync(claudeJsonPath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      // File doesn't exist or isn't valid JSON REDACTED start fresh
+    }
+
+    const mcpServers = (data.mcpServers ?? {}) as Record<string, unknown>;
+
+    // Register gateway-tools if not already present
+    mcpServers["gateway-tools"] = {
+      type: "stdio",
+      command: "tsx",
+      args: [mcpServerScript],
+      env: {
+        GATEWAY_CLI_COMMAND: process.env.GATEWAY_CLI_COMMAND ?? "openclaw",
       },
     };
 
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    data.mcpServers = mcpServers;
+    writeFileSync(claudeJsonPath, JSON.stringify(data, null, 2));
   }
 
   private ensureClaudeMd(workingDirectory: string): void {
