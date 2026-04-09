@@ -21,6 +21,9 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { execFileSync } from "node:child_process";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 
 /**
  * Inline CJS script that finds the openclaw install directory and loads
@@ -173,14 +176,34 @@ export function createMcpServer(): Server {
 
     const result = await executeTool(name, (args ?? {}) as Record<string, unknown>);
     // Pass through content blocks as-is REDACTED they may be text, image, or other MCP types
-    return {
-      content: result.content.map((c) => {
-        if (c.type === "image") {
-          return { type: "image" as const, data: c.data as string, mimeType: c.mimeType as string };
+    const mappedContent: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+    for (const c of result.content) {
+      if (c.type === "image") {
+        // Image content may use either MCP format ({data, mimeType}) or
+        // Anthropic format ({source: {data, media_type}})
+        const src = c.source as { data?: string; media_type?: string } | undefined;
+        const data = (c.data ?? src?.data ?? "") as string;
+        const mimeType = (c.mimeType ?? src?.media_type ?? "image/png") as string;
+        if (data) {
+          mappedContent.push({ type: "image" as const, data, mimeType });
+          // Also save to a temp file so CC can access the data programmatically
+          try {
+            const ext = mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" : "png";
+            const fileName = `screenshot-${Date.now()}.${ext}`;
+            const filePath = join(tmpdir(), fileName);
+            writeFileSync(filePath, Buffer.from(data, "base64"));
+            mappedContent.push({ type: "text" as const, text: `Screenshot saved to: ${filePath}` });
+          } catch {
+            // Saving failed REDACTED image block is still returned
+          }
+        } else {
+          mappedContent.push({ type: "text" as const, text: "(empty image)" });
         }
-        return { type: "text" as const, text: (c.text ?? JSON.stringify(c)) as string };
-      }),
-    };
+      } else {
+        mappedContent.push({ type: "text" as const, text: (c.text ?? JSON.stringify(c)) as string });
+      }
+    }
+    return { content: mappedContent };
   });
 
   console.error("[mcp-server] Server started (tools will be discovered on first use)");
