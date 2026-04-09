@@ -92,7 +92,7 @@ process.stdout.write('__MCP_JSON__' + JSON.stringify(defs));
 function executeTool(
   toolName: string,
   args: Record<string, unknown>,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<{ content: Array<Record<string, unknown>> }> {
   const script = `${FIND_OPENCLAW_SNIPPET}
 (async () => {
   const tools = findOpenClawTools();
@@ -172,8 +172,14 @@ export function createMcpServer(): Server {
     }
 
     const result = await executeTool(name, (args ?? {}) as Record<string, unknown>);
+    // Pass through content blocks as-is REDACTED they may be text, image, or other MCP types
     return {
-      content: result.content.map((c) => ({ type: c.type as "text", text: c.text })),
+      content: result.content.map((c) => {
+        if (c.type === "image") {
+          return { type: "image" as const, data: c.data as string, mimeType: c.mimeType as string };
+        }
+        return { type: "text" as const, text: (c.text ?? JSON.stringify(c)) as string };
+      }),
     };
   });
 
