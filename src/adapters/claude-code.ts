@@ -294,8 +294,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     const settings = {
       mcpServers: {
         "gateway-tools": {
-          command: "npx",
-          args: ["tsx", mcpServerScript],
+          command: "tsx",
+          args: [mcpServerScript],
           env: {
             GATEWAY_CLI_COMMAND: process.env.GATEWAY_CLI_COMMAND ?? "openclaw",
           },

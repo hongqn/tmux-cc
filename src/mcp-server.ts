@@ -133,10 +133,22 @@ function executeTool(
 }
 
 /**
- * Create and configure the MCP server with dynamically discovered tools.
+ * Create and configure the MCP server with lazy-loaded tools.
+ * Tool discovery is deferred to the first tools/list call to avoid
+ * blocking the MCP handshake (discovery takes ~6s on slow machines).
  */
 export function createMcpServer(): Server {
-  const toolDefs = discoverTools();
+  let toolDefs: ToolDefinition[] | null = null;
+
+  function ensureTools(): ToolDefinition[] {
+    if (toolDefs === null) {
+      toolDefs = discoverTools();
+      console.error(
+        `[mcp-server] Registered ${toolDefs.length} tools: ${toolDefs.map((t) => t.name).join(", ")}`,
+      );
+    }
+    return toolDefs;
+  }
 
   const server = new Server(
     { name: "gateway-tools", version: "3.0.0" },
@@ -144,7 +156,7 @@ export function createMcpServer(): Server {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: toolDefs.map((t) => ({
+    tools: ensureTools().map((t) => ({
       name: t.name,
       description: t.description ?? `${t.label ?? t.name} tool`,
       inputSchema: t.parameters ?? { type: "object" as const, properties: {} },
@@ -153,7 +165,8 @@ export function createMcpServer(): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const def = toolDefs.find((t) => t.name === name);
+    const defs = ensureTools();
+    const def = defs.find((t) => t.name === name);
     if (!def) {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -164,9 +177,7 @@ export function createMcpServer(): Server {
     };
   });
 
-  console.error(
-    `[mcp-server] Registered ${toolDefs.length} tools: ${toolDefs.map((t) => t.name).join(", ")}`,
-  );
+  console.error("[mcp-server] Server started (tools will be discovered on first use)");
   return server;
 }
 
