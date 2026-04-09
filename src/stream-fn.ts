@@ -100,13 +100,31 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
   const config = { ...DEFAULT_CONFIG, ...opts.config };
   const adapter = opts.adapter;
 
-  return (_model: unknown, context: Context, options?: { sessionId?: string }) => {
+  return (_model: unknown, context: Context, options?: { sessionId?: string; signal?: AbortSignal }) => {
     const stream = createAssistantMessageEventStream();
-    // Cancellation signal REDACTED set when the consumer calls return() (e.g., /stop)
+    // Cancellation signal REDACTED set when the consumer calls return() or abort signal fires (e.g., /stop)
     let cancelled = false;
     let cancelSession: SessionState | null = null;
     // Set when the stream has completed normally REDACTED prevents return() from sending Escape
     let streamDone = false;
+
+    // Listen to the abort signal from the caller (pi-agent forwards this from /stop)
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        cancelled = true;
+      } else {
+        options.signal.addEventListener("abort", () => {
+          console.log(`[tmux-cc] abort signal received REDACTED cancelling stream`);
+          cancelled = true;
+          // Send Escape to interrupt CC if we have a session
+          if (cancelSession && !streamDone) {
+            sendTmuxKey(config.tmuxSession, cancelSession.windowName, "Escape")
+              .then(() => console.log(`[tmux-cc] sent Escape to interrupt CC after abort signal`))
+              .catch(() => { /* window may already be gone */ });
+          }
+        }, { once: true });
+      }
+    }
 
     const run = async () => {
       let streamStarted = false;
