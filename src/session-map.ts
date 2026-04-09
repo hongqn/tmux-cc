@@ -149,6 +149,7 @@ async function createNewSession(
       transcriptOffset: 0,
       lastActivityMs: Date.now(),
       model,
+      turnCount: 0,
       existingTranscriptPaths: existingFiles,
     };
 
@@ -203,6 +204,7 @@ async function createNewSession(
     transcriptOffset: 0,
     lastActivityMs: Date.now(),
     model,
+    turnCount: 0,
     existingTranscriptPaths: existingFiles,
     claudeSessionId: persistedClaudeId,
   };

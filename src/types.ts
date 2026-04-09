@@ -46,6 +46,8 @@ export interface SessionState {
   lastActivityMs: number;
   /** The model currently used by this session. */
   model: string;
+  /** Number of completed request/response turns in this session. */
+  turnCount: number;
   /**
    * Snapshot of existing transcript files taken before creating the tmux window.
    * Maps file path REDACTED file size at snapshot time.

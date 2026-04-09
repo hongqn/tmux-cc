@@ -354,9 +354,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         console.log(`[tmux-cc] pushed: done REDACTED all stream events emitted`);
         streamDone = true;
 
-        // Schedule eager cleanup to free memory sooner on one-shot sessions (e.g., crons)
+        // Track turns and schedule eager cleanup for one-shot sessions
         if (session) {
-          scheduleEagerCleanup(session.sessionKey, config);
+          session.turnCount++;
+          // Only eager-clean sessions with few turns (likely cron one-shots).
+          // Multi-turn conversations are kept alive for the full idle timeout.
+          if (session.turnCount <= 1) {
+            scheduleEagerCleanup(session.sessionKey, config);
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
