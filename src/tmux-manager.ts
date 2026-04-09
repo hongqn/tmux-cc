@@ -135,20 +135,20 @@ export async function sendTmuxKey(tmuxSession: string, windowName: string, key: 
 }
 
 /**
- * Check if Claude Code process is alive in the given tmux window.
- * Returns true if the pane's current command contains "claude".
+ * Check if a specific process is alive in the given tmux window.
+ * Returns true if the pane's current command contains the processName.
  * Uses list-panes instead of display-message to avoid silent fallback
  * to the default window when the target window doesn't exist.
  */
-export async function isProcessAlive(tmuxSession: string, windowName: string): Promise<boolean> {
+export async function isProcessAlive(tmuxSession: string, windowName: string, processName = "claude"): Promise<boolean> {
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
     const info = await exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
-    // With remain-on-exit, pane_current_command still shows "claude" even
+    // With remain-on-exit, pane_current_command still shows the process name even
     // after the process exits.  Check pane_dead to avoid false positives.
     const dead = info.endsWith(" 1");
     if (dead) return false;
-    return info.toLowerCase().includes("claude");
+    return info.toLowerCase().includes(processName.toLowerCase());
   } catch (e) {
     console.log(`[tmux-cc] isProcessAlive: window gone, window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return false;
