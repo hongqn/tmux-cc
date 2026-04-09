@@ -739,6 +739,32 @@ async function pollForResponse(
             return pendingResponse;
           }
         }
+      } else {
+        // No entries at all from this turn REDACTED agent may be stuck at a prompt
+        // (e.g., pasted text not submitted, trust/permissions dialog).
+        // This is critical for existing sessions where transcriptPath is
+        // already set: the discovery-phase prompt check never runs.
+        if (adapter) {
+          await adapter.handleBlockingPrompts(config.tmuxSession, session.windowName);
+        } else {
+          try {
+            const content = await capturePane(config.tmuxSession, session.windowName, 20);
+            if (content?.includes("[Pasted text #")) {
+              console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            } else if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
+              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
+              await sleep(300);
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            } else if (content?.includes("I trust this folder")) {
+              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
+              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            }
+          } catch {
+            // Ignore errors from prompt check
+          }
+        }
       }
 
       // Check if agent exited (window gone or process dead)
