@@ -676,7 +676,7 @@ function mimeToExt(mimeType: string): string {
  *
  * Steering messages may have string content or an array of content blocks.
  */
-function extractSteeringText(msg: unknown): string | null {
+export function extractSteeringText(msg: unknown): string | null {
   if (!msg || typeof msg !== "object") return null;
   const m = msg as Record<string, unknown>;
   if (typeof m.content === "string") return m.content;

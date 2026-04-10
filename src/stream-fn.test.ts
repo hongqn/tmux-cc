@@ -1,6 +1,6 @@
 import type { Message, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { deriveSessionKey, extractNewUserMessages, stripBootstrapWarnings } from "./stream-fn.js";
+import { deriveSessionKey, extractNewUserMessages, extractSteeringText, stripBootstrapWarnings } from "./stream-fn.js";
 
 describe("stream-fn", () => {
   describe("deriveSessionKey", () => {
@@ -336,6 +336,56 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
       const result = stripBootstrapWarnings(text);
       expect(result).toBe("");
+    });
+  });
+
+  describe("extractSteeringText", () => {
+    it("extracts plain string content", () => {
+      expect(extractSteeringText({ content: "hello" })).toBe("hello");
+    });
+
+    it("extracts text from content blocks array", () => {
+      expect(extractSteeringText({
+        content: [
+          { type: "text", text: "part1" },
+          { type: "text", text: " part2" },
+        ],
+      })).toBe("part1 part2");
+    });
+
+    it("skips non-text blocks in content array", () => {
+      expect(extractSteeringText({
+        content: [
+          { type: "image", url: "http://example.com" },
+          { type: "text", text: "only text" },
+        ],
+      })).toBe("only text");
+    });
+
+    it("returns null for empty content array", () => {
+      expect(extractSteeringText({ content: [] })).toBeNull();
+    });
+
+    it("returns null for array with no text blocks", () => {
+      expect(extractSteeringText({
+        content: [{ type: "image", url: "http://example.com" }],
+      })).toBeNull();
+    });
+
+    it("returns null for null input", () => {
+      expect(extractSteeringText(null)).toBeNull();
+    });
+
+    it("returns null for undefined input", () => {
+      expect(extractSteeringText(undefined)).toBeNull();
+    });
+
+    it("returns null for non-object input", () => {
+      expect(extractSteeringText("just a string")).toBeNull();
+    });
+
+    it("returns null for object without content", () => {
+      expect(extractSteeringText({ role: "user" })).toBeNull();
     });
   });
 });
