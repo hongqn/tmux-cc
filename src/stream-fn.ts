@@ -101,7 +101,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
   const config = { ...DEFAULT_CONFIG, ...opts.config };
   const adapter = opts.adapter;
 
-  return (_model: unknown, context: Context, options?: { sessionId?: string; signal?: AbortSignal }) => {
+  return (_model: unknown, context: Context, options?: Record<string, unknown>) => {
     const stream = createAssistantMessageEventStream();
     // Cancellation signal REDACTED set when the consumer calls return() or abort signal fires (e.g., /stop)
     let cancelled = false;
@@ -109,12 +109,22 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     // Set when the stream has completed normally REDACTED prevents return() from sending Escape
     let streamDone = false;
 
+    const signal = options?.signal as AbortSignal | undefined;
+    const sessionId = options?.sessionId as string | undefined;
+
+    // Extract getSteeringMessages from options REDACTED pi-agent-core spreads its
+    // config into the third argument of streamFn, so this is available at
+    // runtime even though it's not in the declared type.
+    const getSteeringMessages = options?.getSteeringMessages as
+      | (() => unknown[] | Promise<unknown[]>)
+      | undefined;
+
     // Listen to the abort signal from the caller (pi-agent forwards this from /stop)
-    if (options?.signal) {
-      if (options.signal.aborted) {
+    if (signal) {
+      if (signal.aborted) {
         cancelled = true;
       } else {
-        options.signal.addEventListener("abort", () => {
+        signal.addEventListener("abort", () => {
           console.log(`[tmux-cc] abort signal received REDACTED cancelling stream`);
           cancelled = true;
           // Send Escape to interrupt CC if we have a session
@@ -132,8 +142,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       let thinkingStartEmitted = false;
       try {
         // Step 1: Derive a stable session key from the conversation
-        const sessionKey = deriveSessionKey(context.messages, options?.sessionId);
-        console.log(`[tmux-cc] run: sessionKey=${sessionKey}, messageCount=${context.messages.length}, sessionId=${options?.sessionId ?? "none"}`);
+        const sessionKey = deriveSessionKey(context.messages, sessionId);
+        console.log(`[tmux-cc] run: sessionKey=${sessionKey}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
 
         // Step 2: Extract new user message(s) from context
         const userText = extractNewUserMessages(context.messages);
@@ -332,8 +342,31 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           stream.push({ type: "done", reason: "stop", message: msg });
         };
 
+        // Build a steering callback that drains the steering queue and
+        // types any new messages into the agent's tmux pane.
+        const checkSteering = getSteeringMessages
+          ? async (): Promise<number> => {
+              const msgs = (await getSteeringMessages()) || [];
+              if (msgs.length === 0) return 0;
+              let injected = 0;
+              for (const msg of msgs) {
+                const text = extractSteeringText(msg);
+                if (text) {
+                  console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
+                  try {
+                    await sendKeys(config.tmuxSession, session.windowName, text);
+                    injected++;
+                  } catch (e) {
+                    console.error(`[tmux-cc] steering: sendKeys failed: ${e instanceof Error ? e.message : e}`);
+                  }
+                }
+              }
+              return injected;
+            }
+          : undefined;
+
         // Step 8: Poll transcript for response
-        let response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled);
+        let response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled, checkSteering);
 
         // Step 8.5: If agent died (no response), restart and retry once.
         const aliveAfterPoll = adapter
@@ -358,7 +391,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           await sendKeys(config.tmuxSession, session.windowName, finalText);
 
-          response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled);
+          response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled, checkSteering);
         }
 
         if (!response) {
@@ -639,6 +672,25 @@ function mimeToExt(mimeType: string): string {
 }
 
 /**
+ * Extract text content from a steering message (AgentMessage from pi-agent-core).
+ *
+ * Steering messages may have string content or an array of content blocks.
+ */
+function extractSteeringText(msg: unknown): string | null {
+  if (!msg || typeof msg !== "object") return null;
+  const m = msg as Record<string, unknown>;
+  if (typeof m.content === "string") return m.content;
+  if (Array.isArray(m.content)) {
+    const text = m.content
+      .filter((b: Record<string, unknown>) => b.type === "text")
+      .map((b: Record<string, unknown>) => b.text)
+      .join("");
+    return text || null;
+  }
+  return null;
+}
+
+/**
  * Poll the JSONL transcript for a complete assistant response.
  *
  * Polls at the configured interval until either:
@@ -648,6 +700,11 @@ function mimeToExt(mimeType: string): string {
  * The deadline extends whenever new transcript entries appear, so
  * tool-call-heavy responses that produce ongoing activity won't
  * time out prematurely.
+ *
+ * When {@link checkSteering} is provided (queue mode = "steer"),
+ * each poll iteration drains the steering queue and types any new
+ * messages directly into the agent's tmux pane so the agent can
+ * handle them mid-task without waiting for the stream to end.
  */
 async function pollForResponse(
   session: SessionState,
@@ -656,6 +713,7 @@ async function pollForResponse(
   adapter?: AgentAdapter,
   onNewEntries?: (allEntries: TranscriptEntry[]) => void,
   isCancelled?: () => boolean,
+  checkSteering?: () => Promise<number>,
 ): Promise<AssistantResponse | null> {
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
@@ -682,6 +740,15 @@ async function pollForResponse(
     }
 
     onNewEntries?.(allEntries);
+
+    // Check for steering messages and inject them into the agent's tmux pane.
+    // This allows mid-task message handling when queue mode is "steer".
+    if (checkSteering) {
+      const steered = await checkSteering();
+      if (steered > 0) {
+        deadline = Date.now() + config.responseTimeoutMs;
+      }
+    }
 
     if (!session.transcriptPath) {
       // Try to discover the transcript file
@@ -775,6 +842,18 @@ async function pollForResponse(
       }
 
       if (response.isComplete && response.text) {
+        // Before returning, check for last-moment steering messages.
+        // If the user sent a message just as the agent finished, inject
+        // it so the agent handles it in the same session instead of
+        // requiring a separate turn via the agent loop.
+        if (checkSteering) {
+          const steered = await checkSteering();
+          if (steered > 0) {
+            console.log(`[tmux-cc] poll #${pollCount}: response was complete but ${steered} steering message(s) injected, continuing poll`);
+            deadline = Date.now() + config.responseTimeoutMs;
+            continue;
+          }
+        }
         console.log(`[tmux-cc] poll #${pollCount}: response complete, textLen=${response.text.length}`);
         return response;
       }
