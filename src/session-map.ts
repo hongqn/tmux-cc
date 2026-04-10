@@ -174,6 +174,22 @@ async function createNewSession(
     await killWindow(config.tmuxSession, windowName);
   }
 
+  // Register the session in the map BEFORE creating the window so that
+  // the cleanup interval (which can fire at any time) won't kill it as
+  // an "orphan" while waitForReady is still pending.
+  const state: SessionState = {
+    sessionKey,
+    windowName,
+    transcriptOffset: 0,
+    lastActivityMs: Date.now(),
+    model,
+    turnCount: 0,
+    existingTranscriptPaths: existingFiles,
+    claudeSessionId: persistedClaudeId,
+  };
+  sessions.set(sessionKey, state);
+  hasEverCreatedSession = true;
+
   // Create the agent window via adapter or legacy path
   if (adapter) {
     await adapter.createAgentWindow({
@@ -198,19 +214,8 @@ async function createNewSession(
     : await tmuxWaitForReady(config.tmuxSession, windowName);
   console.log(`[tmux-cc] createNewSession: waitForReady=${ready}`);
 
-  const state: SessionState = {
-    sessionKey,
-    windowName,
-    transcriptOffset: 0,
-    lastActivityMs: Date.now(),
-    model,
-    turnCount: 0,
-    existingTranscriptPaths: existingFiles,
-    claudeSessionId: persistedClaudeId,
-  };
-
-  sessions.set(sessionKey, state);
-  hasEverCreatedSession = true;
+  // Update lastActivityMs after startup completes
+  state.lastActivityMs = Date.now();
   return state;
 }
 
