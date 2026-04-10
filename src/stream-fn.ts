@@ -183,6 +183,38 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           return;
         }
 
+        // Step 5.5: Wait for agent to finish auto-compaction on resume.
+        // When CC resumes with --resume, it may auto-compact right after
+        // showing the REDACTED prompt. waitForReady detects REDACTED and returns, but
+        // CC immediately starts processing /compact. Any message sent via
+        // sendKeys during compaction is lost. Wait for CC to become idle.
+        {
+          const STABILIZE_DELAY_MS = 2000;
+          const IDLE_TIMEOUT_MS = 120_000;
+          await sleep(STABILIZE_DELAY_MS);
+          const processing = adapter
+            ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+            : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+          if (processing) {
+            console.log(`[tmux-cc] agent is processing (auto-compacting?), waiting for idle...`);
+            const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
+            while (Date.now() < idleDeadline) {
+              await sleep(1000);
+              if (cancelled) {
+                console.log(`[tmux-cc] cancelled while waiting for idle`);
+                return;
+              }
+              const still = adapter
+                ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+                : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+              if (!still) {
+                console.log(`[tmux-cc] agent is now idle after auto-compaction`);
+                break;
+              }
+            }
+          }
+        }
+
         // Step 6: Record current transcript offset before sending.
         // The session's transcriptPath was set during createNewSession
         // (via snapshot-based discovery). For subsequent messages in the
