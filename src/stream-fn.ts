@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { getOrCreateSession, restartSession, scheduleEagerCleanup } from "./session-map.js";
+import { getOrCreateSession, resolveAgentId, restartSession, scheduleEagerCleanup } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -162,8 +162,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // its own context files (CLAUDE.md, MEMORY.md) directly.
         const finalText = stripBootstrapWarnings(rawText);
 
-        // Step 4: Get or create the agent session
-        const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter);
+        // Step 4: Resolve agent account ID for MCP tools
+        const agentAccountId = await resolveAgentId(sessionId);
+
+        // Step 4.5: Get or create the agent session
+        const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter, agentAccountId ?? undefined);
         cancelSession = session;
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 

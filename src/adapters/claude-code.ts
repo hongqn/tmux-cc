@@ -144,7 +144,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     workingDirectory: string;
     model: string;
     resumeSessionId?: string;
+    agentAccountId?: string;
   }): Promise<void> {
+    const extraEnvVars: Record<string, string> = {};
+    if (params.agentAccountId) {
+      extraEnvVars.OPENCLAW_AGENT_ACCOUNT_ID = params.agentAccountId;
+    }
     await createWindow(
       {
         tmuxSession: params.tmuxSession,
@@ -156,6 +161,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         windowName: params.windowName,
         model: params.model,
         resumeSessionId: params.resumeSessionId,
+        extraEnvVars,
       },
     );
   }

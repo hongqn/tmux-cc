@@ -181,6 +181,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     workingDirectory: string;
     model: string;
     resumeSessionId?: string;
+    agentAccountId?: string;
   }): Promise<void> {
     await ensureTmuxSession(params.tmuxSession);
 
@@ -200,10 +201,13 @@ export class CopilotCliAdapter implements AgentAdapter {
 
     // Limit V8 heap to prevent OOM crashes
     const heapLimit = this.maxHeapMB;
-    const envFlag = `-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`;
+    const envFlags = [`-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`];
+    if (params.agentAccountId) {
+      envFlags.push(`-e ${shellEscape(`OPENCLAW_AGENT_ACCOUNT_ID=${params.agentAccountId}`)}`);
+    }
 
     await exec(
-      `tmux new-window -t ${target} -n ${shellEscape(params.windowName)} -c ${shellEscape(params.workingDirectory)} ${envFlag} ${shellEscape(cmd)}`,
+      `tmux new-window -t ${target} -n ${shellEscape(params.windowName)} -c ${shellEscape(params.workingDirectory)} ${envFlags.join(" ")} ${shellEscape(cmd)}`,
     );
 
     // Keep pane alive after exit for diagnostics

@@ -40,13 +40,14 @@ function findOpenClawTools() {
     const d = dirname(realpathSync(bin));
     if (!dirs.includes(d)) dirs.unshift(d);
   } catch {}
+  const agentAccountId = process.env.OPENCLAW_AGENT_ACCOUNT_ID || undefined;
   for (const dir of dirs) {
     try {
       const distDir = join(dir, 'dist');
       const rf = readdirSync(distDir).find(f => f.startsWith('openclaw-tools.runtime-') && f.endsWith('.js'));
       if (!rf) continue;
       const mod = require(join(distDir, rf));
-      if (typeof mod.createOpenClawTools === 'function') return mod.createOpenClawTools({});
+      if (typeof mod.createOpenClawTools === 'function') return mod.createOpenClawTools({ agentAccountId });
     } catch {}
   }
   return null;

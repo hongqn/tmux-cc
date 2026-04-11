@@ -53,6 +53,8 @@ export interface AgentAdapter {
     workingDirectory: string;
     model: string;
     resumeSessionId?: string;
+    /** OpenClaw agent account ID REDACTED set as env var for MCP server to resolve botToken. */
+    agentAccountId?: string;
   }): Promise<void>;
 
   /**

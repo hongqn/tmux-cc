@@ -27,6 +27,9 @@ import type { AgentAdapter } from "./adapters/types.js";
 import type { SessionState, TmuxClaudeConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
 
 /** Unique ID for this module instance REDACTED detects multiple module loads. */
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
@@ -46,6 +49,43 @@ let hasEverCreatedSession = false;
 /** @internal Test-only: set the hasEverCreatedSession flag. */
 export function _setHasEverCreatedSession(value: boolean): void {
   hasEverCreatedSession = value;
+}
+
+/** Cache of gateway sessionId REDACTED agent ID. */
+const agentIdCache = new Map<string, string>();
+
+/**
+ * Resolve the OpenClaw agent ID from a gateway session ID.
+ *
+ * Scans ~/.openclaw/agents/{agentId}/sessions/ for a JSONL file matching the
+ * session UUID. The agent directory name is the agent ID (which typically
+ * matches the channel account key, e.g., "myagent").
+ *
+ * Results are cached so the scan only runs once per session.
+ */
+export async function resolveAgentId(gatewaySessionId: string | undefined): Promise<string | null> {
+  if (!gatewaySessionId) return null;
+  const cached = agentIdCache.get(gatewaySessionId);
+  if (cached) return cached;
+
+  const agentsDir = join(homedir(), ".openclaw", "agents");
+  try {
+    const entries = await readdir(agentsDir);
+    for (const agentDir of entries) {
+      const sessionFile = join(agentsDir, agentDir, "sessions", `${gatewaySessionId}.jsonl`);
+      try {
+        await stat(sessionFile);
+        agentIdCache.set(gatewaySessionId, agentDir);
+        console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} REDACTED ${agentDir}`);
+        return agentDir;
+      } catch {
+        // File doesn't exist in this agent dir
+      }
+    }
+  } catch {
+    // agents dir doesn't exist
+  }
+  return null;
 }
 
 /**
@@ -78,6 +118,7 @@ export async function getOrCreateSession(
   model: string,
   config: TmuxClaudeConfig = {},
   adapter?: AgentAdapter,
+  agentAccountId?: string,
 ): Promise<SessionState> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
   const existing = sessions.get(sessionKey);
@@ -111,7 +152,7 @@ export async function getOrCreateSession(
 
   // Create a new session
   console.log(`[tmux-cc] getOrCreateSession: creating new session key=${sessionKey}`);
-  return await createNewSession(sessionKey, model, mergedConfig, adapter);
+  return await createNewSession(sessionKey, model, mergedConfig, adapter, agentAccountId);
 }
 
 /**
@@ -122,6 +163,7 @@ async function createNewSession(
   model: string,
   config: Required<TmuxClaudeConfig>,
   adapter?: AgentAdapter,
+  agentAccountId?: string,
 ): Promise<SessionState> {
   const windowName = windowNameFromSessionKey(sessionKey);
 
@@ -151,6 +193,7 @@ async function createNewSession(
       model,
       turnCount: 0,
       existingTranscriptPaths: existingFiles,
+      agentAccountId,
     };
 
     sessions.set(sessionKey, state);
@@ -186,6 +229,7 @@ async function createNewSession(
     turnCount: 0,
     existingTranscriptPaths: existingFiles,
     claudeSessionId: persistedClaudeId,
+    agentAccountId,
   };
   sessions.set(sessionKey, state);
   hasEverCreatedSession = true;
@@ -198,6 +242,7 @@ async function createNewSession(
       workingDirectory: config.workingDirectory,
       model,
       resumeSessionId: persistedClaudeId,
+      agentAccountId,
     });
   } else {
     const tmuxOpts: TmuxManagerOptions = {
@@ -243,6 +288,7 @@ export async function restartSession(
       workingDirectory: config.workingDirectory,
       model: state.model,
       resumeSessionId: state.claudeSessionId,
+      agentAccountId: state.agentAccountId,
     });
   } else {
     const tmuxOpts: TmuxManagerOptions = {

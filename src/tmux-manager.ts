@@ -32,6 +32,8 @@ export interface CreateWindowOptions {
   model: string;
   /** Optional: resume a previous Claude Code session by ID. */
   resumeSessionId?: string;
+  /** Extra environment variables to set on the tmux window (via -e flag). */
+  extraEnvVars?: Record<string, string>;
 }
 
 /** Execute a shell command and return trimmed stdout. */
@@ -81,10 +83,13 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
   // concurrently on low-memory servers.  The -e flag sets an env var for
   // this window only (no shell wrapper needed).
   const heapLimit = opts.maxHeapMB ?? DEFAULT_MAX_HEAP_MB;
-  const envFlag = `-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`;
+  const envFlags = [`-e 'NODE_OPTIONS=--max-old-space-size=${heapLimit}'`];
+  for (const [key, val] of Object.entries(windowOpts.extraEnvVars ?? {})) {
+    envFlags.push(`-e ${shellEscape(`${key}=${val}`)}`);
+  }
 
   await exec(
-    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${envFlag} ${shellEscape(cmd)}`,
+    `tmux new-window -t ${target} -n ${shellEscape(windowOpts.windowName)} -c ${shellEscape(opts.workingDirectory)} ${envFlags.join(" ")} ${shellEscape(cmd)}`,
   );
 
   // Keep the pane alive after CC exits so we can read exit code + last output

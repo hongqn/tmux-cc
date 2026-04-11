@@ -55,6 +55,8 @@ export interface SessionState {
    * appends to an existing file (size increase).
    */
   existingTranscriptPaths?: Map<string, number>;
+  /** OpenClaw agent account ID (e.g., "myagent") REDACTED used to set env var for MCP server. */
+  agentAccountId?: string;
 }
 
 /**
