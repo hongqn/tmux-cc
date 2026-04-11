@@ -108,6 +108,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     let cancelSession: SessionState | null = null;
     // Set when the stream has completed normally REDACTED prevents return() from sending Escape
     let streamDone = false;
+    // Guard against sending Escape multiple times (abort handler + poll + return())
+    let escSent = false;
 
     const signal = options?.signal as AbortSignal | undefined;
     const sessionId = options?.sessionId as string | undefined;
@@ -119,6 +121,23 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       | (() => unknown[] | Promise<unknown[]>)
       | undefined;
 
+    /** Send Escape to CC exactly once, then Ctrl-U to clear any stale input. */
+    const interruptCC = async (source: string) => {
+      if (escSent) return;
+      escSent = true;
+      if (cancelSession && !streamDone) {
+        try {
+          await sendTmuxKey(config.tmuxSession, cancelSession.windowName, "Escape");
+          // Small delay to let CC return to prompt, then clear any stale text in input buffer
+          await sleep(200);
+          await sendTmuxKey(config.tmuxSession, cancelSession.windowName, "C-u");
+          console.log(`[tmux-cc] sent Escape + Ctrl-U to interrupt CC (${source})`);
+        } catch {
+          // Window may already be gone
+        }
+      }
+    };
+
     // Listen to the abort signal from the caller (pi-agent forwards this from /stop)
     if (signal) {
       if (signal.aborted) {
@@ -127,12 +146,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         signal.addEventListener("abort", () => {
           console.log(`[tmux-cc] abort signal received REDACTED cancelling stream`);
           cancelled = true;
-          // Send Escape to interrupt CC if we have a session
-          if (cancelSession && !streamDone) {
-            sendTmuxKey(config.tmuxSession, cancelSession.windowName, "Escape")
-              .then(() => console.log(`[tmux-cc] sent Escape to interrupt CC after abort signal`))
-              .catch(() => { /* window may already be gone */ });
-          }
+          interruptCC("abort signal");
         }, { once: true });
       }
     }
@@ -430,6 +444,26 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         if (!response) {
+          // If cancelled (e.g. /stop), end stream silently REDACTED the gateway
+          // already knows the run was aborted, so emitting an error response
+          // would result in a stale/duplicate message to the user.
+          if (cancelled) {
+            console.log(`[tmux-cc] run aborted (/stop), ending stream with stop confirmation`);
+            closeThinkingBlock();
+            // Emit explicit "ðREDACTED Stopped." text so the gateway has visible
+            // content to render.  A thinking-only (no-text) response may
+            // trigger fallback error messages in some gateway versions.
+            const stopText = "ðREDACTED Stopped.";
+            const textBlock: TextContent = { type: "text", text: stopText };
+            partialContent.push(textBlock);
+            const textIdx = partialContent.length - 1;
+            stream.push({ type: "text_start", contentIndex: textIdx, partial: makePartial() });
+            stream.push({ type: "text_delta", content: stopText, partial: makePartial() });
+            stream.push({ type: "done", reason: "stop", message: makePartial() });
+            streamDone = true;
+            return;
+          }
+
           const ccAlive = adapter
             ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
             : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
@@ -542,15 +576,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             return it.return?.(v) ?? { done: true as const, value: undefined };
           }
           cancelled = true;
-          // Interrupt CC if we have a session
-          if (cancelSession) {
-            try {
-              await sendTmuxKey(config.tmuxSession, cancelSession.windowName, "Escape");
-              console.log(`[tmux-cc] sent Escape to interrupt CC after /stop`);
-            } catch {
-              // Window may already be gone
-            }
-          }
+          await interruptCC("return()");
           return it.return?.(v) ?? { done: true as const, value: undefined };
         },
         async throw(e?: unknown) {
@@ -765,12 +791,8 @@ async function pollForResponse(
 
     // Check cancellation (e.g. /stop command)
     if (isCancelled?.()) {
-      console.log(`[tmux-cc] poll #${pollCount}: cancelled by consumer, interrupting CC`);
-      try {
-        await sendTmuxKey(config.tmuxSession, session.windowName, "Escape");
-      } catch {
-        // Window may already be gone
-      }
+      console.log(`[tmux-cc] poll #${pollCount}: cancelled by consumer`);
+      // Don't send Escape here REDACTED interruptCC() handles it exactly once
       return null;
     }
 
