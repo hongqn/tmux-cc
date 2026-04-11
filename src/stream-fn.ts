@@ -974,6 +974,21 @@ async function pollForResponse(
       const processAlive = adapter
         ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
         : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+
+      // Agent is alive but producing no new transcript entries REDACTED it may be
+      // running a long tool (e.g., a 10-minute build).  If the agent's pane
+      // shows a child process (isProcessing=true), the agent is working and
+      // we should keep waiting instead of timing out.
+      if (processAlive) {
+        const stillProcessing = adapter
+          ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+          : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+        if (stillProcessing) {
+          // Extend deadline REDACTED the agent is actively running a tool
+          deadline = Date.now() + config.responseTimeoutMs;
+        }
+      }
+
       if (!processAlive) {
         const exitCode = await tmuxReadExitCode(config.tmuxSession, session.windowName);
         const paneContent = await capturePane(config.tmuxSession, session.windowName, 30);
