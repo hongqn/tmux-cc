@@ -256,7 +256,6 @@ export class CopilotCliAdapter implements AgentAdapter {
     const args = [
       this.copilotCommand,
       "--allow-all",
-      "--autopilot",
       "--model",
       params.model,
     ];
@@ -347,7 +346,9 @@ export class CopilotCliAdapter implements AgentAdapter {
   }
 
   async isProcessAlive(tmuxSession: string, windowName: string): Promise<boolean> {
-    return tmuxIsProcessAlive(tmuxSession, windowName, "copilot");
+    // Copilot CLI runs as `node`, not `copilot`, in pane_current_command
+    return tmuxIsProcessAlive(tmuxSession, windowName, "node") ||
+           tmuxIsProcessAlive(tmuxSession, windowName, "copilot");
   }
 
   async isProcessing(tmuxSession: string, windowName: string): Promise<boolean> {
@@ -399,8 +400,9 @@ export class CopilotCliAdapter implements AgentAdapter {
         await sleep(300);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       }
-      // Pasted text not submitted
-      else if (content.includes("[Pasted text #")) {
+      // Pasted text not submitted REDACTED Copilot uses "[Paste #N - M lines]",
+      // Claude Code uses "[Pasted text #N]"
+      else if (content.includes("[Pasted text #") || content.includes("[Paste #")) {
         console.log(`[copilot-cli] pasted text not submitted, sending Enter`);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       }
