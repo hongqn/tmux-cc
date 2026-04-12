@@ -66,6 +66,7 @@ export interface CopilotCliAdapterOptions {
  * Copilot CLI supports both OpenAI and Claude models.
  */
 const COPILOT_MODELS: AgentModelDef[] = [
+  // OpenAI flagship models
   {
     id: "gpt-5.4",
     name: "GPT-5.4 (copilot)",
@@ -98,6 +99,41 @@ const COPILOT_MODELS: AgentModelDef[] = [
     contextWindow: 128_000,
     maxTokens: 16_384,
   },
+  // OpenAI codex models
+  {
+    id: "gpt-5.3-codex",
+    name: "GPT-5.3 Codex (copilot)",
+    agentModelId: "gpt-5.3-codex",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "gpt-5.2-codex",
+    name: "GPT-5.2 Codex (copilot)",
+    agentModelId: "gpt-5.2-codex",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  // OpenAI mini models
+  {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini (copilot)",
+    agentModelId: "gpt-5.4-mini",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "gpt-5-mini",
+    name: "GPT-5 Mini (copilot)",
+    agentModelId: "gpt-5-mini",
+    reasoning: true,
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  },
+  // Claude models
   {
     id: "claude-sonnet-4.6",
     name: "Claude Sonnet 4.6 (copilot)",
@@ -111,6 +147,38 @@ const COPILOT_MODELS: AgentModelDef[] = [
     name: "Claude Opus 4.6 (copilot)",
     agentModelId: "claude-opus-4.6",
     reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "claude-sonnet-4.5",
+    name: "Claude Sonnet 4.5 (copilot)",
+    agentModelId: "claude-sonnet-4.5",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "claude-opus-4.5",
+    name: "Claude Opus 4.5 (copilot)",
+    agentModelId: "claude-opus-4.5",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "claude-sonnet-4",
+    name: "Claude Sonnet 4 (copilot)",
+    agentModelId: "claude-sonnet-4",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
+    id: "claude-haiku-4.5",
+    name: "Claude Haiku 4.5 (copilot)",
+    agentModelId: "claude-haiku-4.5",
+    reasoning: false,
     contextWindow: 200_000,
     maxTokens: 16_384,
   },
