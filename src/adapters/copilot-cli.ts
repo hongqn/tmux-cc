@@ -188,6 +188,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     const args = [
       this.copilotCommand,
       "--allow-all",
+      "--autopilot",
       "--model",
       params.model,
     ];
@@ -248,10 +249,11 @@ export class CopilotCliAdapter implements AgentAdapter {
       try {
         const content = await capturePane(tmuxSession, windowName);
 
-        // Auto-dismiss workspace trust prompt
-        if (content.includes("I trust this folder")) {
+        // Auto-dismiss workspace trust prompt REDACTED select "remember" option
+        if (content.includes("Do you trust the files")) {
           const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
-          await exec(`tmux send-keys -t ${target} Enter`);
+          // Select option 2: "Yes, and remember this folder"
+          await exec(`tmux send-keys -t ${target} Down Enter`);
           await sleep(2000);
           continue;
         }
@@ -283,7 +285,8 @@ export class CopilotCliAdapter implements AgentAdapter {
   async isProcessing(tmuxSession: string, windowName: string): Promise<boolean> {
     try {
       const content = await capturePane(tmuxSession, windowName);
-      return content.includes("esc to int");
+      // Copilot shows "Esc to cancel" (or "esc to int" in some versions) while processing
+      return content.includes("Esc to cancel") || content.includes("esc to int");
     } catch {
       return false;
     }
@@ -321,8 +324,11 @@ export class CopilotCliAdapter implements AgentAdapter {
       if (!content) return;
 
       // Trust prompt
-      if (content.includes("I trust this folder")) {
+      if (content.includes("Do you trust the files")) {
         console.log(`[copilot-cli] auto-dismissing trust prompt`);
+        // Select "Yes, and remember" (option 2)
+        await sendTmuxKey(tmuxSession, windowName, "Down");
+        await sleep(300);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       }
       // Pasted text not submitted
@@ -406,7 +412,7 @@ export class CopilotCliAdapter implements AgentAdapter {
       // Start fresh
     }
 
-    const servers = (data.servers ?? data.mcpServers ?? {}) as Record<string, unknown>;
+    const servers = (data.mcpServers ?? data.servers ?? {}) as Record<string, unknown>;
 
     servers["gateway-tools"] = {
       type: "stdio",
@@ -417,7 +423,9 @@ export class CopilotCliAdapter implements AgentAdapter {
       },
     };
 
-    data.servers = servers;
+    data.mcpServers = servers;
+    // Remove legacy key if present
+    delete data.servers;
     writeFileSync(mcpConfigPath, JSON.stringify(data, null, 2));
   }
 

@@ -18,7 +18,7 @@ import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
 
 const TMUX_CC_PROVIDER_ID = "tmux-cc";
-const COPILOT_PROVIDER_ID = "copilot-cc";
+const COPILOT_PROVIDER_ID = "tmux-copilot";
 
 /**
  * Get plugin config from the OpenClaw config object.
@@ -153,7 +153,7 @@ export default definePluginEntry({
     const claudeAdapter = new ClaudeCodeAdapter({ pluginDir });
     registerAdapterProvider(api, TMUX_CC_PROVIDER_ID, "Claude Code (tmux)", claudeAdapter);
 
-    // Register Copilot CLI adapter (copilot-cc provider)
+    // Register Copilot CLI adapter (tmux-copilot provider)
     const copilotAdapter = new CopilotCliAdapter({ pluginDir });
     registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter);
   },

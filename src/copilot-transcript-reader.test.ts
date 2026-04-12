@@ -151,6 +151,79 @@ describe("copilot-transcript-reader", () => {
       expect(entry).not.toBeNull();
       expect(entry!.message.content).toHaveLength(0);
     });
+
+    it("handles real Copilot events.jsonl user.message with transformedContent", () => {
+      // Real event from Copilot CLI v1.0.23
+      const event = JSON.stringify({
+        type: "user.message",
+        data: {
+          content: "say hello",
+          transformedContent: "<current_datetime>2026-04-12T02:30:56.118Z</current_datetime>\n\nsay hello\n\n<reminder>...</reminder>",
+          attachments: [],
+          agentMode: "autopilot",
+          interactionId: "f416a16c-f5ee-40fe-962f-b9367b1b65d0",
+        },
+        id: "55120dbb-ae44-40ff-87d4-d5ec91a4b99b",
+        timestamp: "2026-04-12T02:30:56.118Z",
+      });
+      const entry = parseEvent(event);
+      expect(entry).not.toBeNull();
+      expect(entry!.type).toBe("user");
+      // Should use original content, not transformedContent
+      expect(entry!.message.content).toEqual([{ type: "text", text: "say hello" }]);
+    });
+
+    it("handles real Copilot task_complete tool request", () => {
+      const event = JSON.stringify({
+        type: "assistant.message",
+        data: {
+          messageId: "54a4cdd2-1244-4d29-8a10-50d5ac10f28d",
+          content: "",
+          toolRequests: [{
+            toolCallId: "call_b46dhJ8BpqqRVSIX9QESRRKK",
+            name: "task_complete",
+            arguments: { summary: "Greeted the user." },
+            type: "function",
+            toolTitle: "Task complete",
+          }],
+        },
+      });
+      const entry = parseEvent(event);
+      expect(entry).not.toBeNull();
+      expect(entry!.type).toBe("assistant");
+      expect(entry!.message.content).toHaveLength(1);
+      expect(entry!.message.content[0]).toEqual({
+        type: "tool_use",
+        id: "call_b46dhJ8BpqqRVSIX9QESRRKK",
+        name: "task_complete",
+        input: { summary: "Greeted the user." },
+      });
+      expect(entry!.stop_reason).toBe("tool_use");
+    });
+
+    it("ignores session.mode_changed events", () => {
+      const event = JSON.stringify({
+        type: "session.mode_changed",
+        data: { previousMode: "interactive", newMode: "autopilot" },
+      });
+      expect(parseEvent(event)).toBeNull();
+    });
+
+    it("ignores session.model_change events", () => {
+      const event = JSON.stringify({
+        type: "session.model_change",
+        data: { previousModel: "gpt-4.1", newModel: "gpt-5.1" },
+      });
+      expect(parseEvent(event)).toBeNull();
+    });
+
+    it("ignores session.shutdown events", () => {
+      const event = JSON.stringify({
+        type: "session.shutdown",
+        data: { shutdownType: "routine" },
+      });
+      expect(parseEvent(event)).toBeNull();
+    });
   });
 
   describe("extractSessionId", () => {
@@ -263,6 +336,81 @@ describe("copilot-transcript-reader", () => {
       ];
       const result = extractAssistantResponse(entries);
       expect(result.text).toBe("New response");
+    });
+
+    it("handles real Copilot multi-turn with tool use and continuation", () => {
+      // Simulates a real Copilot autopilot session:
+      // 1. User asks to list files
+      // 2. Assistant calls "view" tool (no text)
+      // 3. Turn ends, continuation turn starts
+      // 4. Assistant responds with text
+      // 5. Turn ends, continuation user message (empty)
+      // 6. Assistant calls task_complete
+      // 7. Final turn end
+      const entries: TranscriptEntry[] = [
+        // User prompt
+        { type: "user", message: { content: [{ type: "text", text: "list the files" }] }, sessionId: "s1" },
+        // Turn 1: tool call
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "t1", name: "view", input: { path: "." } },
+            ],
+          },
+          sessionId: "s1",
+          stop_reason: "tool_use",
+        },
+        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
+        // Turn 2: text response (continuation)
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Here are the files:\n- file1\n- file2" }] },
+          sessionId: "s1",
+        },
+        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
+        // Continuation user message (empty - autopilot)
+        { type: "user", message: { content: [{ type: "text", text: "" }] }, sessionId: "s1" },
+        // Turn 3: task_complete
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "t2", name: "task_complete", input: { summary: "Listed files" } },
+            ],
+          },
+          sessionId: "s1",
+          stop_reason: "tool_use",
+        },
+        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
+      ];
+
+      // The last user entry is the empty continuation message
+      // Response after that is the task_complete tool call (no text)
+      const result = extractAssistantResponse(entries);
+      // Text is empty since the last assistant message after the last user entry only has tool_use
+      expect(result.text).toBe("");
+      expect(result.isComplete).toBe(true);
+    });
+
+    it("handles Copilot multi-turn with collectAllText across continuation", () => {
+      const entries: TranscriptEntry[] = [
+        { type: "user", message: { content: [{ type: "text", text: "list files" }] }, sessionId: "s1" },
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Let me check..." }] },
+          sessionId: "s1",
+        },
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Here are the files: a, b, c" }] },
+          sessionId: "s1",
+        },
+        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
+      ];
+      const result = extractAssistantResponse(entries, { collectAllText: true });
+      expect(result.text).toBe("Let me check...\nHere are the files: a, b, c");
+      expect(result.isComplete).toBe(true);
     });
   });
 });
