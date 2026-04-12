@@ -296,13 +296,25 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
     }
   }
 
-  // Determine stop_reason: if there are tool requests, it's "tool_use"
-  // If there's only text and no tool requests, we can't definitively say
-  // it's "end_turn" REDACTED that comes from turn_end event (mapped to turn_duration).
-  // However, an assistant.message with content but no tool requests that
-  // is followed by assistant.turn_end is an end_turn.
-  // We leave stop_reason undefined here; completion is detected via turn_duration.
-  const stopReason = toolRequests && toolRequests.length > 0 ? "tool_use" : undefined;
+  // Determine stop_reason:
+  // - ask_user tool call = turn is effectively complete (agent is waiting for input)
+  // - other tool requests = "tool_use" (agent is still working)
+  // - no tool requests = undefined (completion detected via turn_duration)
+  const hasAskUser = toolRequests?.some((r) => r.name === "ask_user") ?? false;
+  const stopReason = hasAskUser
+    ? "ask_user"
+    : toolRequests && toolRequests.length > 0
+      ? "tool_use"
+      : undefined;
+
+  // When ask_user is called with no text content, use the question as response text
+  if (hasAskUser && !blocks.some((b) => b.type === "text")) {
+    const askUserReq = toolRequests!.find((r) => r.name === "ask_user");
+    const question = askUserReq?.arguments?.question as string | undefined;
+    if (question) {
+      blocks.push({ type: "text", text: question });
+    }
+  }
 
   return {
     type: "assistant",
@@ -376,6 +388,7 @@ export function extractAssistantResponse(
 
   const hasExplicitCompletion =
     lastEntry.stop_reason != null && lastEntry.stop_reason !== "tool_use";
+  // ask_user is treated as completion REDACTED the agent is waiting for user input
   const isComplete = hasExplicitCompletion || hasTurnDuration;
 
   return {

@@ -248,10 +248,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         console.log(`[tmux-cc] offsetBeforeSend=${offsetBeforeSend}`);
 
 
-        // Step 7: Send message via tmux
+        // Step 7: Send message via tmux (adapter may transform and handle UI state)
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         try {
-          await sendKeys(config.tmuxSession, session.windowName, finalText);
+          if (adapter?.sendMessage) {
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText);
+          } else {
+            await sendKeys(config.tmuxSession, session.windowName, finalText);
+          }
         } catch (e) {
           // Window may have been killed between isProcessAlive check and sendKeys
           console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
@@ -403,7 +407,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                 if (text) {
                   console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
                   try {
-                    await sendKeys(config.tmuxSession, session.windowName, text);
+                    if (adapter?.sendMessage) {
+                      await adapter.sendMessage(config.tmuxSession, session.windowName, text);
+                    } else {
+                      await sendKeys(config.tmuxSession, session.windowName, text);
+                    }
                     injected++;
                   } catch (e) {
                     console.error(`[tmux-cc] steering: sendKeys failed: ${e instanceof Error ? e.message : e}`);
@@ -438,7 +446,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           offsetBeforeSend = 0;
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
-          await sendKeys(config.tmuxSession, session.windowName, finalText);
+          if (adapter?.sendMessage) {
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText);
+          } else {
+            await sendKeys(config.tmuxSession, session.windowName, finalText);
+          }
 
           response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled, checkSteering);
         }

@@ -51,6 +51,13 @@ const READY_POLL_INTERVAL_MS = 500;
 const READY_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_HEAP_MB = 1024;
 
+/**
+ * Keep-session prompt (KSSP) suffix appended to every user message.
+ * Instructs the agent to call ask_user at the end of each response,
+ * keeping the turn alive to avoid per-request billing.
+ */
+const KSSP_SUFFIX = " . Use the ask user tool at the very end to prompt me if I really want to quit or have other requests. Never quit in the middle before I have confirmed.";
+
 /** Copilot CLI adapter configuration. */
 export interface CopilotCliAdapterOptions {
   /** Path to the Copilot CLI executable (default: "copilot"). */
@@ -409,6 +416,60 @@ export class CopilotCliAdapter implements AgentAdapter {
     } catch {
       // Ignore errors from prompt check
     }
+  }
+
+  // REDACTED Message Sending REDACTED
+
+  /**
+   * Send a user message to Copilot CLI with KSSP suffix.
+   * Detects if the agent is at an ask_user prompt and handles
+   * navigation to freeform input when showing options.
+   */
+  async sendMessage(
+    tmuxSession: string,
+    windowName: string,
+    text: string,
+  ): Promise<void> {
+    const ksspText = text + KSSP_SUFFIX;
+
+    // Check if agent is at an ask_user prompt REDACTED dismiss it before sending
+    const pane = await capturePane(tmuxSession, windowName, 30);
+    if (pane && this.isAskUserPrompt(pane)) {
+      console.log(`[copilot-cli] detected ask_user prompt, pressing Esc to dismiss`);
+      await sendTmuxKey(tmuxSession, windowName, "Escape");
+      // Wait for the agent to finish processing the dismissal and return to idle
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        await sleep(1000);
+        const currentPane = await capturePane(tmuxSession, windowName, 30);
+        if (!currentPane) break;
+        // Still showing ask_user UI REDACTED keep waiting
+        if (this.isAskUserPrompt(currentPane)) continue;
+        // Check for idle prompt: REDACTED present and no processing spinner
+        if (currentPane.includes("REDACTED") && !currentPane.includes("esc to interrupt")) {
+          console.log(`[copilot-cli] ask_user dismissed, agent is idle`);
+          break;
+        }
+      }
+    }
+
+    await sendKeys(tmuxSession, windowName, ksspText);
+  }
+
+  /**
+   * Detect if the pane shows an ask_user prompt (options or freeform).
+   * The bordered box with "REDACTED to select" or "REDACTED Asking user" is reliable.
+   */
+  private isAskUserPrompt(paneContent: string): boolean {
+    // Options variant: bordered box with selector
+    if (paneContent.includes("REDACTED to select") && paneContent.includes("Esc to cancel")) {
+      return true;
+    }
+    // Freeform variant or generic: "REDACTED Asking user" indicator
+    if (paneContent.includes("REDACTED Asking user")) {
+      return true;
+    }
+    return false;
   }
 
   // REDACTED Transcript REDACTED

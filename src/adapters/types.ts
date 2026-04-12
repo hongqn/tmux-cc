@@ -86,6 +86,13 @@ export interface AgentAdapter {
    */
   handleBlockingPrompts(tmuxSession: string, windowName: string): Promise<void>;
 
+  /**
+   * Send a user message to the agent, handling any agent-specific UI state
+   * (e.g., ask_user prompts) and message transformations (e.g., appending
+   * keep-session prompts). Falls back to plain sendKeys if not implemented.
+   */
+  sendMessage?(tmuxSession: string, windowName: string, text: string): Promise<void>;
+
   // REDACTED Transcript REDACTED
 
   /** Snapshot existing transcript files (path REDACTED size) before creating a session. */
