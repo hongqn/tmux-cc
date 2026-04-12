@@ -1,7 +1,7 @@
 {
   "id": "tmux-cc",
   "enabledByDefault": false,
-  "providers": ["tmux-cc"],
+  "providers": ["tmux-cc", "tmux-copilot"],
   "providerAuthEnvVars": {},
   "providerAuthChoices": [
     {
@@ -12,6 +12,15 @@
       "choiceHint": "Claude Code CLI running in tmux sessions",
       "groupId": "tmux-cc",
       "groupLabel": "Claude Code (tmux)"
+    },
+    {
+      "provider": "tmux-copilot",
+      "method": "local",
+      "choiceId": "tmux-copilot",
+      "choiceLabel": "Copilot CLI (tmux)",
+      "choiceHint": "GitHub Copilot CLI running in tmux sessions",
+      "groupId": "tmux-copilot",
+      "groupLabel": "Copilot CLI (tmux)"
     }
   ],
   "configSchema": {

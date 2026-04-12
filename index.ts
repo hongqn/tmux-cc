@@ -154,8 +154,12 @@ export default definePluginEntry({
     registerAdapterProvider(api, TMUX_CC_PROVIDER_ID, "Claude Code (tmux)", claudeAdapter);
 
     // Register Copilot CLI adapter (tmux-copilot provider)
-    const copilotAdapter = new CopilotCliAdapter({ pluginDir });
-    registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter);
+    try {
+      const copilotAdapter = new CopilotCliAdapter({ pluginDir });
+      registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter);
+    } catch (err) {
+      console.error(`[tmux-cc] failed to register ${COPILOT_PROVIDER_ID}:`, err);
+    }
   },
 });
 
