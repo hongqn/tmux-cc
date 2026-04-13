@@ -159,7 +159,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       },
       {
         windowName: params.windowName,
-        model: params.model,
+        model: this.resolveModelId(params.model),
         resumeSessionId: params.resumeSessionId,
         extraEnvVars,
       },
@@ -206,7 +206,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       }
     }
 
-    await sendKeys(tmuxSession, windowName, `/model ${model}`);
+    await sendKeys(tmuxSession, windowName, `/model ${this.resolveModelId(model)}`);
   }
 
   async handleBlockingPrompts(

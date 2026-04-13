@@ -426,7 +426,7 @@ describe("acceptance: model selection", () => {
 
     const cmds = getCmds();
     expect(cmds.some((c) => c.includes("send-keys") && c.includes("Escape") && !c.includes("-l"))).toBe(true);
-    expect(cmds.some((c) => c.includes("send-keys") && c.includes("/model opus-4.6"))).toBe(true);
+    expect(cmds.some((c) => c.includes("send-keys") && c.includes("/model claude-opus-4-6"))).toBe(true);
   });
 
   it("passes the correct model to Claude Code", async () => {

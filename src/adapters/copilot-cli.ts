@@ -264,7 +264,7 @@ export class CopilotCliAdapter implements AgentAdapter {
       this.copilotCommand,
       "--allow-all",
       "--model",
-      params.model,
+      this.resolveModelId(params.model),
     ];
 
     if (params.resumeSessionId) {
@@ -393,7 +393,7 @@ export class CopilotCliAdapter implements AgentAdapter {
       }
     }
 
-    await sendKeys(tmuxSession, windowName, `/model ${model}`);
+    await sendKeys(tmuxSession, windowName, `/model ${this.resolveModelId(model)}`);
   }
 
   async handleBlockingPrompts(

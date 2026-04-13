@@ -126,14 +126,12 @@ function registerAdapterProvider(
 
       adapter.setupWorkspace(workDir);
 
-      const resolvedModelId = adapter.resolveModelId(ctx.modelId);
-
       startCleanupTimer(mergedConfig);
 
       return createTmuxClaudeStreamFn({
         config: {
           ...mergedConfig,
-          defaultModel: resolvedModelId,
+          defaultModel: ctx.modelId,
         },
         adapter,
       });
