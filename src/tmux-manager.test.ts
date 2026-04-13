@@ -116,9 +116,9 @@ describe("tmux-manager", () => {
       expect(await isProcessAlive("test-session", "cc-window1")).toBe(true);
     });
 
-    it("returns false when pane command is something else", async () => {
+    it("returns true when pane is alive even if command differs (child process)", async () => {
       execMock.mockImplementation(mockSuccess("bash 0"));
-      expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(true);
     });
 
     it("returns false when pane is dead even if command is claude (remain-on-exit)", async () => {

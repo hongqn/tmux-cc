@@ -140,8 +140,14 @@ export async function sendTmuxKey(tmuxSession: string, windowName: string, key: 
 }
 
 /**
- * Check if a specific process is alive in the given tmux window.
- * Returns true if the pane's current command contains the processName.
+ * Check if the agent process is alive in the given tmux window.
+ *
+ * Uses pane_dead as the authoritative signal (set by tmux's remain-on-exit).
+ * pane_current_command is checked for diagnostics only REDACTED it can transiently
+ * show a child-process name instead of the agent binary, so relying on it
+ * for the alive/dead decision caused false-positive "agent process died"
+ * crashes.
+ *
  * Uses list-panes instead of display-message to avoid silent fallback
  * to the default window when the target window doesn't exist.
  */
@@ -149,11 +155,16 @@ export async function isProcessAlive(tmuxSession: string, windowName: string, pr
   try {
     const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
     const info = await exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
-    // With remain-on-exit, pane_current_command still shows the process name even
-    // after the process exits.  Check pane_dead to avoid false positives.
     const dead = info.endsWith(" 1");
     if (dead) return false;
-    return info.toLowerCase().includes(processName.toLowerCase());
+    // Pane is alive (pane_dead=0).  Log a warning if pane_current_command
+    // doesn't contain the expected process name REDACTED this can happen transiently
+    // when the agent spawns child processes but doesn't mean the agent died.
+    if (!info.toLowerCase().includes(processName.toLowerCase())) {
+      const cmd = info.replace(/ \d+$/, "").trim();
+      console.log(`[tmux-cc] isProcessAlive: pane alive but command is "${cmd}" (expected "${processName}"), window=${windowName}`);
+    }
+    return true;
   } catch (e) {
     console.log(`[tmux-cc] isProcessAlive: window gone, window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return false;

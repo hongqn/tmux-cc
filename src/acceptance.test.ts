@@ -139,7 +139,7 @@ describe("acceptance: session lifecycle", () => {
       if (cmd.includes("pane_current_command")) {
         aliveCheckCount++;
         if (!sessionCreated) return "claude 0";
-        if (aliveCheckCount === 1) return "bash";
+        if (aliveCheckCount === 1) return "claude 1";  // pane_dead=1 (remain-on-exit)
         return "claude 0";
       }
       if (cmd.includes("capture-pane")) return "REDACTED ";
