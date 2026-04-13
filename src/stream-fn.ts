@@ -789,8 +789,8 @@ async function pollForResponse(
   checkSteering?: () => Promise<number>,
 ): Promise<AssistantResponse | null> {
   const startTime = Date.now();
-  // Hard cap: never wait longer than 30 minutes total, regardless of extensions.
-  const MAX_TOTAL_MS = 30 * 60 * 1000;
+  // Hard cap: never wait longer than 10 minutes total, regardless of extensions.
+  const MAX_TOTAL_MS = 10 * 60 * 1000;
   // Shorter extension when agent is alive but not actively processing
   // (e.g., waiting for API response, thinking). This prevents premature
   // timeouts while still allowing eventual timeout if truly stuck.
@@ -1009,9 +1009,11 @@ async function pollForResponse(
           // Agent is alive but not visibly processing (e.g., waiting for API
           // response, thinking).  Use a shorter extension so we eventually
           // time out if truly stuck, but don't cut off a slow API call.
-          const newDeadline = Date.now() + ALIVE_IDLE_EXTENSION_MS;
-          if (newDeadline > deadline) {
-            deadline = newDeadline;
+          // Only extend when close to expiring (< 30s left) to avoid
+          // extending every poll cycle and generating excessive log spam.
+          const remainingMs = deadline - Date.now();
+          if (remainingMs < 30_000) {
+            deadline = Date.now() + ALIVE_IDLE_EXTENSION_MS;
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             console.log(`[tmux-cc] poll #${pollCount}: agent alive but idle, extending deadline by ${ALIVE_IDLE_EXTENSION_MS / 1000}s (elapsed=${elapsed}s)`);
           }
