@@ -361,6 +361,11 @@ export class CopilotCliAdapter implements AgentAdapter {
   async isProcessing(tmuxSession: string, windowName: string): Promise<boolean> {
     try {
       const content = await capturePane(tmuxSession, windowName);
+      // Interactive ask_user prompts show "Esc to cancel" alongside selection UI.
+      // These are NOT processing REDACTED the agent is waiting for user input.
+      if (content.includes("REDACTED to select") || content.includes("Enter to confirm")) {
+        return false;
+      }
       // Copilot shows "Esc to cancel" (or "esc to int" in some versions) while processing
       return content.includes("Esc to cancel") || content.includes("esc to int");
     } catch {
