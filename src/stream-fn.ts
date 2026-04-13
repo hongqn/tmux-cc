@@ -788,6 +788,14 @@ async function pollForResponse(
   isCancelled?: () => boolean,
   checkSteering?: () => Promise<number>,
 ): Promise<AssistantResponse | null> {
+  const startTime = Date.now();
+  // Hard cap: never wait longer than 30 minutes total, regardless of extensions.
+  const MAX_TOTAL_MS = 30 * 60 * 1000;
+  // Shorter extension when agent is alive but not actively processing
+  // (e.g., waiting for API response, thinking). This prevents premature
+  // timeouts while still allowing eventual timeout if truly stuck.
+  const ALIVE_IDLE_EXTENSION_MS = 120_000;
+
   let deadline = Date.now() + config.responseTimeoutMs;
   let currentOffset = offsetBeforeSend;
   let effectiveOffsetBeforeSend = offsetBeforeSend;
@@ -798,7 +806,7 @@ async function pollForResponse(
   // Small initial delay to let Claude Code start processing
   await sleep(500);
 
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && (Date.now() - startTime) < MAX_TOTAL_MS) {
     pollCount++;
 
     // Check cancellation (e.g. /stop command)
@@ -988,9 +996,8 @@ async function pollForResponse(
         : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
 
       // Agent is alive but producing no new transcript entries REDACTED it may be
-      // running a long tool (e.g., a 10-minute build).  If the agent's pane
-      // shows a child process (isProcessing=true), the agent is working and
-      // we should keep waiting instead of timing out.
+      // running a long tool (e.g., a 10-minute build) or waiting for an API
+      // response with no child process visible.
       if (processAlive) {
         const stillProcessing = adapter
           ? await adapter.isProcessing(config.tmuxSession, session.windowName)
@@ -998,6 +1005,16 @@ async function pollForResponse(
         if (stillProcessing) {
           // Extend deadline REDACTED the agent is actively running a tool
           deadline = Date.now() + config.responseTimeoutMs;
+        } else {
+          // Agent is alive but not visibly processing (e.g., waiting for API
+          // response, thinking).  Use a shorter extension so we eventually
+          // time out if truly stuck, but don't cut off a slow API call.
+          const newDeadline = Date.now() + ALIVE_IDLE_EXTENSION_MS;
+          if (newDeadline > deadline) {
+            deadline = newDeadline;
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
+            console.log(`[tmux-cc] poll #${pollCount}: agent alive but idle, extending deadline by ${ALIVE_IDLE_EXTENSION_MS / 1000}s (elapsed=${elapsed}s)`);
+          }
         }
       }
 
@@ -1036,7 +1053,9 @@ async function pollForResponse(
     await sleep(config.pollingIntervalMs);
   }
 
-  console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, transcriptPath=${session.transcriptPath ?? "null"}`);
+  const totalElapsed = Math.round((Date.now() - startTime) / 1000);
+  const hitHardCap = (Date.now() - startTime) >= MAX_TOTAL_MS;
+  console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, elapsed=${totalElapsed}s, hardCap=${hitHardCap}, transcriptPath=${session.transcriptPath ?? "null"}`);
   return null;
 }
 
