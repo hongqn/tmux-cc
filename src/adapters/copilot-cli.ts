@@ -437,28 +437,51 @@ export class CopilotCliAdapter implements AgentAdapter {
   ): Promise<void> {
     const ksspText = text + KSSP_SUFFIX;
 
-    // Check if agent is at an ask_user prompt REDACTED dismiss it before sending
+    // Check if agent is at an ask_user prompt REDACTED route user's message through it
     const pane = await capturePane(tmuxSession, windowName, 30);
     if (pane && this.isAskUserPrompt(pane)) {
-      console.log(`[copilot-cli] detected ask_user prompt, pressing Esc to dismiss`);
-      await sendTmuxKey(tmuxSession, windowName, "Escape");
-      // Wait for the agent to finish processing the dismissal and return to idle
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline) {
-        await sleep(1000);
-        const currentPane = await capturePane(tmuxSession, windowName, 30);
-        if (!currentPane) break;
-        // Still showing ask_user UI REDACTED keep waiting
-        if (this.isAskUserPrompt(currentPane)) continue;
-        // Check for idle prompt: REDACTED present and no processing spinner
-        if (currentPane.includes("REDACTED") && !currentPane.includes("esc to interrupt")) {
-          console.log(`[copilot-cli] ask_user dismissed, agent is idle`);
-          break;
+      if (pane.includes("REDACTED to select")) {
+        // Options variant REDACTED navigate to "Other (type your answer)" and type answer
+        const optionCount = this.countAskUserOptions(pane);
+        console.log(`[copilot-cli] ask_user prompt with ${optionCount} options, routing text to Other`);
+
+        // Navigate down to last option (Other)
+        for (let i = 0; i < optionCount - 1; i++) {
+          await sendTmuxKey(tmuxSession, windowName, "Down");
+          await sleep(100);
         }
+        // Select "Other" to open freeform text input
+        await sendTmuxKey(tmuxSession, windowName, "Enter");
+        await sleep(500);
+
+        // Type the user's message and submit (sendKeys adds Enter)
+        await sendKeys(tmuxSession, windowName, ksspText);
+        return;
+      } else {
+        // Freeform variant REDACTED type the answer directly
+        console.log(`[copilot-cli] ask_user freeform prompt, typing answer directly`);
+        await sendKeys(tmuxSession, windowName, ksspText);
+        return;
       }
     }
 
     await sendKeys(tmuxSession, windowName, ksspText);
+  }
+
+  /**
+   * Count the number of options in an ask_user prompt.
+   * Options look like: "REDACTED 1. Label" or "  2. Label" etc.
+   */
+  private countAskUserOptions(paneContent: string): number {
+    const lines = paneContent.split("\n");
+    let count = 0;
+    for (const line of lines) {
+      // Match option lines: optional REDACTED/>, then number and dot
+      if (/^\s*[REDACTED>]?\s*\d+\.\s/.test(line) || /^\s*[REDACTED>]?\s*Other\s/.test(line)) {
+        count++;
+      }
+    }
+    return Math.max(count, 1);
   }
 
   /**
