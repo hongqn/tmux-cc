@@ -789,8 +789,10 @@ async function pollForResponse(
   checkSteering?: () => Promise<number>,
 ): Promise<AssistantResponse | null> {
   const startTime = Date.now();
-  // Hard cap: never wait longer than 10 minutes total, regardless of extensions.
-  const MAX_TOTAL_MS = 10 * 60 * 1000;
+  // Absolute hard cap: never wait longer than this, even if agent is actively processing.
+  const ABSOLUTE_HARD_CAP_MS = 45 * 60 * 1000;
+  // Idle hard cap: if no transcript activity AND no active processing for this long, give up.
+  const IDLE_HARD_CAP_MS = 10 * 60 * 1000;
   // Shorter extension when agent is alive but not actively processing
   // (e.g., waiting for API response, thinking). This prevents premature
   // timeouts while still allowing eventual timeout if truly stuck.
@@ -802,11 +804,13 @@ async function pollForResponse(
   let pollCount = 0;
   let lastLogTime = 0;
   const allEntries: TranscriptEntry[] = [];
+  // Track last time we saw real activity (transcript entries or active processing)
+  let lastActiveTime = Date.now();
 
   // Small initial delay to let Claude Code start processing
   await sleep(500);
 
-  while (Date.now() < deadline && (Date.now() - startTime) < MAX_TOTAL_MS) {
+  while (Date.now() < deadline && (Date.now() - startTime) < ABSOLUTE_HARD_CAP_MS && (Date.now() - lastActiveTime) < IDLE_HARD_CAP_MS) {
     pollCount++;
 
     // Check cancellation (e.g. /stop command)
@@ -899,8 +903,9 @@ async function pollForResponse(
     session.transcriptOffset = currentOffset;
 
     if (result.entries.length > 0) {
-      // Activity detected REDACTED extend the deadline
+      // Activity detected REDACTED extend the deadline and reset idle timer
       deadline = Date.now() + config.responseTimeoutMs;
+      lastActiveTime = Date.now();
       session.lastActivityMs = Date.now();
       allEntries.push(...result.entries);
       onNewEntries?.(allEntries);
@@ -1003,8 +1008,9 @@ async function pollForResponse(
           ? await adapter.isProcessing(config.tmuxSession, session.windowName)
           : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
         if (stillProcessing) {
-          // Extend deadline REDACTED the agent is actively running a tool
+          // Extend deadline and reset idle timer REDACTED the agent is actively running a tool
           deadline = Date.now() + config.responseTimeoutMs;
+          lastActiveTime = Date.now();
         } else {
           // Agent is alive but not visibly processing (e.g., waiting for API
           // response, thinking).  Use a shorter extension so we eventually
@@ -1056,8 +1062,11 @@ async function pollForResponse(
   }
 
   const totalElapsed = Math.round((Date.now() - startTime) / 1000);
-  const hitHardCap = (Date.now() - startTime) >= MAX_TOTAL_MS;
-  console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, elapsed=${totalElapsed}s, hardCap=${hitHardCap}, transcriptPath=${session.transcriptPath ?? "null"}`);
+  const idleMs = Math.round((Date.now() - lastActiveTime) / 1000);
+  const hitAbsoluteCap = (Date.now() - startTime) >= ABSOLUTE_HARD_CAP_MS;
+  const hitIdleCap = (Date.now() - lastActiveTime) >= IDLE_HARD_CAP_MS;
+  const capReason = hitAbsoluteCap ? "absoluteCap" : hitIdleCap ? "idleCap" : "deadline";
+  console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, elapsed=${totalElapsed}s, idle=${idleMs}s, reason=${capReason}, transcriptPath=${session.transcriptPath ?? "null"}`);
   return null;
 }
 
