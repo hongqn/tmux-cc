@@ -48,7 +48,7 @@ function sleep(ms: number): Promise<void> {
 const MODEL_SWITCH_POLL_MS = 500;
 const MODEL_SWITCH_INTERRUPT_TIMEOUT_MS = 15_000;
 const READY_POLL_INTERVAL_MS = 500;
-const READY_TIMEOUT_MS = 30_000;
+const READY_TIMEOUT_MS = 120_000; // Copilot CLI loads MCP servers + skills on startup
 const DEFAULT_MAX_HEAP_MB = 1024;
 
 /**
