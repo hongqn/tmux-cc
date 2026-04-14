@@ -437,9 +437,20 @@ export class CopilotCliAdapter implements AgentAdapter {
   ): Promise<void> {
     const ksspText = text + KSSP_SUFFIX;
 
-    // Check if agent is at an ask_user prompt REDACTED route user's message through it
-    const pane = await capturePane(tmuxSession, windowName, 30);
+    // Check if agent is at an ask_user prompt REDACTED route user's message through it.
+    // Capture extra lines (50) to ensure the selection box is visible.
+    let pane = await capturePane(tmuxSession, windowName, 50);
     if (pane && this.isAskUserPrompt(pane)) {
+      // When "REDACTED Asking user" appears but the selection box hasn't rendered yet,
+      // wait up to 5s for it to appear before falling back to freeform.
+      if (pane.includes("REDACTED Asking user") && !pane.includes("REDACTED to select")) {
+        for (let waitMs = 0; waitMs < 5000; waitMs += 500) {
+          await sleep(500);
+          pane = await capturePane(tmuxSession, windowName, 50) || '';
+          if (pane.includes("REDACTED to select")) break;
+        }
+      }
+
       if (pane.includes("REDACTED to select")) {
         // Options variant REDACTED navigate to "Other (type your answer)" and type answer
         const optionCount = this.countAskUserOptions(pane);
@@ -471,13 +482,15 @@ export class CopilotCliAdapter implements AgentAdapter {
   /**
    * Count the number of options in an ask_user prompt.
    * Options look like: "REDACTED 1. Label" or "  2. Label" etc.
+   * Lines may be inside a box border (REDACTED prefix).
    */
   private countAskUserOptions(paneContent: string): number {
     const lines = paneContent.split("\n");
     let count = 0;
     for (const line of lines) {
-      // Match option lines: optional REDACTED/>, then number and dot
-      if (/^\s*[REDACTED>]?\s*\d+\.\s/.test(line) || /^\s*[REDACTED>]?\s*Other\s/.test(line)) {
+      // Strip box border characters before matching
+      const stripped = line.replace(/^[REDACTED|]+\s*/, '');
+      if (/^[REDACTED>]?\s*\d+\.\s/.test(stripped) || /^[REDACTED>]?\s*Other[\s(]/.test(stripped)) {
         count++;
       }
     }
