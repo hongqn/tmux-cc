@@ -34,6 +34,11 @@ function getPluginConfig(config: Record<string, unknown> | undefined): TmuxClaud
 /**
  * Register a provider backed by an AgentAdapter.
  */
+/** Unique custom transport API key per provider, so each gets its own streamFn registration. */
+function providerApiKey(providerId: string): string {
+  return `${providerId}-stream`;
+}
+
 function registerAdapterProvider(
   api: OpenClawPluginApi,
   providerId: string,
@@ -71,11 +76,11 @@ function registerAdapterProvider(
         return {
           provider: {
             baseUrl: `local://${providerId}`,
-            api: "anthropic-v1",
+            api: providerApiKey(providerId),
             models: adapter.models.map((m) => ({
               id: m.id,
               name: m.name,
-              api: "anthropic-v1" as const,
+              api: providerApiKey(providerId) as string,
               reasoning: m.reasoning,
               input: ["text", "image"] as Array<"text" | "image">,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -94,7 +99,7 @@ function registerAdapterProvider(
         id: match.id,
         name: match.name,
         provider: providerId,
-        api: "anthropic-v1" as const,
+        api: providerApiKey(providerId) as string,
         reasoning: match.reasoning,
         contextWindow: match.contextWindow,
         maxTokens: match.maxTokens,
