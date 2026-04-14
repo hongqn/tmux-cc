@@ -287,6 +287,11 @@ export class CopilotCliAdapter implements AgentAdapter {
       "--allow-all",
       "--model",
       this.resolveModelId(params.model),
+      // Reduce memory footprint: disable features not needed for headless agent use
+      "--disable-builtin-mcps",
+      "--no-custom-instructions",
+      "--no-auto-update",
+      "--no-remote",
     ];
 
     if (params.resumeSessionId) {
