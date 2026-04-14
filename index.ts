@@ -134,6 +134,7 @@ function registerAdapterProvider(
           defaultModel: ctx.modelId,
         },
         adapter,
+        providerId,
       });
     },
   });

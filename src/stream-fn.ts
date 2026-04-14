@@ -49,6 +49,8 @@ export interface StreamFnOptions {
   config: TmuxClaudeConfig;
   /** Agent adapter for agent-specific operations. */
   adapter?: AgentAdapter;
+  /** Provider ID (e.g., "tmux-cc", "tmux-copilot") REDACTED used in response metadata. */
+  providerId?: string;
 }
 
 /**
@@ -100,6 +102,7 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
 export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
   const config = { ...DEFAULT_CONFIG, ...opts.config };
   const adapter = opts.adapter;
+  const providerId = opts.providerId ?? "tmux-cc";
 
   return (_model: unknown, context: Context, options?: Record<string, unknown>) => {
     const stream = createAssistantMessageEventStream();
@@ -277,7 +280,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           role: "assistant",
           content: partialContent,
           api: "anthropic-v1",
-          provider: "tmux-cc",
+          provider: providerId,
           model: session.model ?? "claude-code",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
@@ -1182,7 +1185,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
  * Build an AssistantMessage from response.
  * Includes thinking content when present.
  */
-function buildAssistantMessage(response: AssistantResponse, model?: string): AssistantMessage {
+function buildAssistantMessage(response: AssistantResponse, model?: string, provider?: string): AssistantMessage {
   const content: AssistantMessage["content"] = [];
 
   if (response.thinking) {
@@ -1194,7 +1197,7 @@ function buildAssistantMessage(response: AssistantResponse, model?: string): Ass
     role: "assistant",
     content,
     api: "anthropic-v1",
-    provider: "tmux-cc",
+    provider: provider ?? "tmux-cc",
     model: model ?? "claude-code",
     usage: {
       input: 0,
