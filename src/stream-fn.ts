@@ -252,7 +252,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         try {
           if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText);
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionId);
           } else {
             await sendKeys(config.tmuxSession, session.windowName, finalText);
           }
@@ -408,7 +408,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                   console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
                   try {
                     if (adapter?.sendMessage) {
-                      await adapter.sendMessage(config.tmuxSession, session.windowName, text);
+                      await adapter.sendMessage(config.tmuxSession, session.windowName, text, sessionId);
                     } else {
                       await sendKeys(config.tmuxSession, session.windowName, text);
                     }
@@ -447,7 +447,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText);
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionId);
           } else {
             await sendKeys(config.tmuxSession, session.windowName, finalText);
           }

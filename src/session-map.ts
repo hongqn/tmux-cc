@@ -194,6 +194,7 @@ async function createNewSession(
       turnCount: 0,
       existingTranscriptPaths: existingFiles,
       agentAccountId,
+      adapter,
     };
 
     sessions.set(sessionKey, state);
@@ -230,6 +231,7 @@ async function createNewSession(
     existingTranscriptPaths: existingFiles,
     claudeSessionId: persistedClaudeId,
     agentAccountId,
+    adapter,
   };
   sessions.set(sessionKey, state);
   hasEverCreatedSession = true;
@@ -353,6 +355,19 @@ export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promis
   for (const [key, state] of sessions) {
     const idleMs = now - state.lastActivityMs;
     if (idleMs > mergedConfig.idleTimeoutMs) {
+      // Check if adapter reports the session is waiting for user input (KPSS)
+      if (state.adapter?.isWaitingForUserInput) {
+        try {
+          const waiting = await state.adapter.isWaitingForUserInput(mergedConfig.tmuxSession, state.windowName);
+          if (waiting) {
+            console.log(`[tmux-cc] cleanupIdleSessions: skipping key=${key}, window=${state.windowName} REDACTED waiting for user input (KPSS)`);
+            continue;
+          }
+        } catch {
+          // If check fails (window gone), proceed with cleanup
+        }
+      }
+
       console.log(`[tmux-cc] cleanupIdleSessions: inst=${MODULE_INSTANCE_ID} killing idle session key=${key}, window=${state.windowName}, idleMs=${idleMs}`);
       await killWindow(mergedConfig.tmuxSession, state.windowName);
       sessions.delete(key);
@@ -401,6 +416,20 @@ export function scheduleEagerCleanup(
       console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} has new activity, skipping`);
       return;
     }
+
+    // Check if adapter reports the session is waiting for user input (KPSS)
+    if (current.adapter?.isWaitingForUserInput) {
+      try {
+        const waiting = await current.adapter.isWaitingForUserInput(mergedConfig.tmuxSession, current.windowName);
+        if (waiting) {
+          console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} is waiting for user input (KPSS), skipping`);
+          return;
+        }
+      } catch {
+        // If check fails (window gone), proceed with cleanup
+      }
+    }
+
     console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} idle for ${EAGER_CLEANUP_GRACE_MS}ms after stream, killing window=${current.windowName}`);
     try {
       await killWindow(mergedConfig.tmuxSession, current.windowName);

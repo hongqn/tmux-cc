@@ -57,6 +57,8 @@ export interface SessionState {
   existingTranscriptPaths?: Map<string, number>;
   /** OpenClaw agent account ID (e.g., "myagent") REDACTED used to set env var for MCP server. */
   agentAccountId?: string;
+  /** Reference to the adapter that manages this session (for cleanup checks). */
+  adapter?: import("./adapters/types.js").AgentAdapter;
 }
 
 /**

@@ -153,7 +153,13 @@ export default definePluginEntry({
 
     // Register Copilot CLI adapter (tmux-copilot provider)
     try {
-      const copilotAdapter = new CopilotCliAdapter({ pluginDir });
+      const copilotAdapter = new CopilotCliAdapter({
+        pluginDir,
+        // Only enable KPSS (keep-persistent-session) for interactive chat sessions.
+        // Cron, subagent, and other one-shot sessions should not be kept alive.
+        kpssSessionWhitelist: ["*telegram*", "*main"],
+        kpssNonWhitelistBehavior: "no-kpss",
+      });
       registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter);
     } catch (err) {
       console.error(`[tmux-cc] failed to register ${COPILOT_PROVIDER_ID}:`, err);

@@ -66,6 +66,24 @@ export interface CopilotCliAdapterOptions {
   maxHeapMB?: number;
   /** Directory where the plugin source lives (for MCP server script path). */
   pluginDir?: string;
+  /**
+   * Session key whitelist patterns for KPSS (Keep Persistent Session Stop).
+   * Only sessions whose OpenClaw session key matches one of these glob patterns
+   * get the KPSS suffix appended (which causes the agent to call ask_user,
+   * keeping the session alive for multi-turn without per-request billing).
+   *
+   * Example: ["telegram:group:*", "telegram:*"]
+   *
+   * If empty or undefined, KPSS is applied to ALL sessions (legacy behavior).
+   */
+  kpssSessionWhitelist?: string[];
+  /**
+   * Behavior for sessions not matching the KPSS whitelist.
+   * - "no-kpss": Don't append KPSS suffix, allow normal cleanup.
+   * - "reject": Refuse to serve the request (throw an error).
+   * Default: "no-kpss"
+   */
+  kpssNonWhitelistBehavior?: "no-kpss" | "reject";
 }
 
 /**
@@ -241,11 +259,15 @@ export class CopilotCliAdapter implements AgentAdapter {
   private readonly copilotCommand: string;
   private readonly maxHeapMB: number;
   private readonly pluginDir: string;
+  private readonly kpssSessionWhitelist: string[];
+  private readonly kpssNonWhitelistBehavior: "no-kpss" | "reject";
 
   constructor(opts: CopilotCliAdapterOptions = {}) {
     this.copilotCommand = opts.copilotCommand ?? "copilot";
     this.maxHeapMB = opts.maxHeapMB ?? DEFAULT_MAX_HEAP_MB;
     this.pluginDir = opts.pluginDir ?? (import.meta.dirname ?? __dirname);
+    this.kpssSessionWhitelist = opts.kpssSessionWhitelist ?? [];
+    this.kpssNonWhitelistBehavior = opts.kpssNonWhitelistBehavior ?? "no-kpss";
   }
 
   // REDACTED Lifecycle REDACTED
@@ -434,8 +456,14 @@ export class CopilotCliAdapter implements AgentAdapter {
     tmuxSession: string,
     windowName: string,
     text: string,
+    sessionKey?: string,
   ): Promise<void> {
-    const ksspText = text + KSSP_SUFFIX;
+    // Check KPSS whitelist REDACTED only append suffix for whitelisted sessions
+    const kpssEnabled = this.isKpssEnabled(sessionKey);
+    if (!kpssEnabled && this.kpssNonWhitelistBehavior === "reject") {
+      throw new Error(`[copilot-cli] session key "${sessionKey}" does not match KPSS whitelist REDACTED rejected`);
+    }
+    const messageText = kpssEnabled ? text + KSSP_SUFFIX : text;
 
     // Check if agent is at an ask_user prompt REDACTED route user's message through it.
     // Capture extra lines (50) to ensure the selection box is visible.
@@ -466,17 +494,17 @@ export class CopilotCliAdapter implements AgentAdapter {
         await sleep(500);
 
         // Type the user's message and submit (sendKeys adds Enter)
-        await sendKeys(tmuxSession, windowName, ksspText);
+        await sendKeys(tmuxSession, windowName, messageText);
         return;
       } else {
         // Freeform variant REDACTED type the answer directly
         console.log(`[copilot-cli] ask_user freeform prompt, typing answer directly`);
-        await sendKeys(tmuxSession, windowName, ksspText);
+        await sendKeys(tmuxSession, windowName, messageText);
         return;
       }
     }
 
-    await sendKeys(tmuxSession, windowName, ksspText);
+    await sendKeys(tmuxSession, windowName, messageText);
   }
 
   /**
@@ -511,6 +539,43 @@ export class CopilotCliAdapter implements AgentAdapter {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Check if KPSS is enabled for the given session key.
+   * If no whitelist is configured, KPSS is enabled for all sessions.
+   * Otherwise, the session key must match at least one glob pattern.
+   */
+  private isKpssEnabled(sessionKey?: string): boolean {
+    if (this.kpssSessionWhitelist.length === 0) return true;
+    if (!sessionKey) return true; // no session key REDACTED default to enabled
+    return this.kpssSessionWhitelist.some(pattern =>
+      this.matchSessionKeyPattern(sessionKey, pattern),
+    );
+  }
+
+  /**
+   * Simple glob matching for session key patterns.
+   * Supports * as wildcard for any characters.
+   */
+  private matchSessionKeyPattern(sessionKey: string, pattern: string): boolean {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp("^" + escaped.replace(/\*/g, ".*") + "$");
+    return regex.test(sessionKey);
+  }
+
+  /**
+   * Check if the agent is at an ask_user prompt waiting for user input.
+   * Used by cleanup to preserve KPSS sessions.
+   */
+  async isWaitingForUserInput(tmuxSession: string, windowName: string): Promise<boolean> {
+    try {
+      const pane = await capturePane(tmuxSession, windowName, 30);
+      if (!pane) return false;
+      return this.isAskUserPrompt(pane);
+    } catch {
+      return false;
+    }
   }
 
   // REDACTED Transcript REDACTED

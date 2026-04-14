@@ -90,8 +90,18 @@ export interface AgentAdapter {
    * Send a user message to the agent, handling any agent-specific UI state
    * (e.g., ask_user prompts) and message transformations (e.g., appending
    * keep-session prompts). Falls back to plain sendKeys if not implemented.
+   *
+   * @param sessionKey - OpenClaw session key (e.g., "agent:main:telegram:group:-123")
+   *   Used by adapters to decide whether to apply KPSS suffix.
    */
-  sendMessage?(tmuxSession: string, windowName: string, text: string): Promise<void>;
+  sendMessage?(tmuxSession: string, windowName: string, text: string, sessionKey?: string): Promise<void>;
+
+  /**
+   * Check if the agent is waiting for user input (e.g., at an ask_user prompt).
+   * Used by cleanup to avoid killing sessions that are preserved for multi-turn.
+   * Returns false by default (when not implemented).
+   */
+  isWaitingForUserInput?(tmuxSession: string, windowName: string): Promise<boolean>;
 
   // REDACTED Transcript REDACTED
 
