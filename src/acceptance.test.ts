@@ -97,9 +97,8 @@ describe("acceptance: session lifecycle", () => {
     const cmds = getCmds();
     const windowCmd = cmds.find((c) => c.includes("new-window"));
     expect(windowCmd).toBeDefined();
-    expect(windowCmd).toContain("--permission-mode");
-    expect(windowCmd).toContain("bypassPermissions");
-    expect(windowCmd).not.toContain("--dangerously-skip-permissions");
+    expect(windowCmd).toContain("--dangerously-skip-permissions");
+    expect(windowCmd).not.toContain("--permission-mode");
     expect(windowCmd).toContain("--model");
     expect(windowCmd).toContain("sonnet-4.6");
   });

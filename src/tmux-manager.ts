@@ -66,8 +66,7 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
 
   const args = [
     opts.claudeCommand,
-    "--permission-mode",
-    "bypassPermissions",
+    "--dangerously-skip-permissions",
     "--model",
     windowOpts.model,
   ];
@@ -336,6 +335,13 @@ export async function waitForReady(
       if (content.includes("Yes, I accept") && content.includes("Bypass Permissions")) {
         await exec(`tmux send-keys -t ${target} Down`);
         await sleep(300);
+        await exec(`tmux send-keys -t ${target} Enter`);
+        await sleep(2000);
+        continue;
+      }
+
+      // Auto-dismiss edit permission prompt (option 1 "Yes" is pre-selected)
+      if (content.includes("Do you want to make this edit")) {
         await exec(`tmux send-keys -t ${target} Enter`);
         await sleep(2000);
         continue;

@@ -83,9 +83,8 @@ describe("tmux-manager", () => {
       const newWindowCmd = cmds.find((c) => c.includes("new-window"));
       expect(newWindowCmd).toBeDefined();
       expect(newWindowCmd).toContain("cc-window1");
-      expect(newWindowCmd).toContain("--permission-mode");
-      expect(newWindowCmd).toContain("bypassPermissions");
-      expect(newWindowCmd).not.toContain("--dangerously-skip-permissions");
+      expect(newWindowCmd).toContain("--dangerously-skip-permissions");
+      expect(newWindowCmd).not.toContain("--permission-mode");
       expect(newWindowCmd).toContain("sonnet-4.6");
     });
 
