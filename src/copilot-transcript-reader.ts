@@ -307,12 +307,13 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
       ? "tool_use"
       : undefined;
 
-  // When ask_user is called with no text content, use the question as response text
-  if (hasAskUser && !blocks.some((b) => b.type === "text")) {
+  // Append ask_user question as text so it appears in the response
+  // visible in Telegram. Without this, only the text content before ask_user shows.
+  if (hasAskUser) {
     const askUserReq = toolRequests!.find((r) => r.name === "ask_user");
     const question = askUserReq?.arguments?.question as string | undefined;
     if (question) {
-      blocks.push({ type: "text", text: question });
+      blocks.push({ type: "text", text: `\n\n${question}` });
     }
   }
 
