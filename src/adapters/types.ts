@@ -87,6 +87,14 @@ export interface AgentAdapter {
   handleBlockingPrompts(tmuxSession: string, windowName: string): Promise<void>;
 
   /**
+   * Validate whether this adapter should handle the given session.
+   * Throw an error to reject the session REDACTED the gateway will try fallback providers.
+   *
+   * Called early in the stream function, before allocating a tmux window.
+   */
+  validateSession?(sessionKeyName?: string): void;
+
+  /**
    * Send a user message to the agent, handling any agent-specific UI state
    * (e.g., ask_user prompts) and message transformations (e.g., appending
    * keep-session prompts). Falls back to plain sendKeys if not implemented.

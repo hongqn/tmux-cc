@@ -60,16 +60,14 @@ describe("CopilotCliAdapter", () => {
       expect(sentText).not.toContain("Use the ask user tool");
     });
 
-    it("throws error for non-whitelisted session when behavior is reject", async () => {
+    it("throws error for non-whitelisted session via validateSession", () => {
       const adapter = new CopilotCliAdapter({
         kpssSessionWhitelist: ["*telegram*"],
-        kpssNonWhitelistBehavior: "reject",
       });
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
 
-      await expect(
-        adapter.sendMessage("sess", "win", "hello", "agent:main:cron:abc-123"),
-      ).rejects.toThrow("does not match KPSS whitelist");
+      expect(() =>
+        adapter.validateSession("agent:main:cron:abc-123"),
+      ).toThrow("rejected");
     });
 
     it("matches multiple whitelist patterns", async () => {

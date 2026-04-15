@@ -453,6 +453,19 @@ export class CopilotCliAdapter implements AgentAdapter {
   // REDACTED Message Sending REDACTED
 
   /**
+   * Reject sessions that don't match the KPSS whitelist.
+   * Called early, before tmux window allocation, so the gateway can
+   * fall back to another provider (e.g., tmux-cc for cron sessions).
+   */
+  validateSession(sessionKeyName?: string): void {
+    if (!this.isKpssEnabled(sessionKeyName)) {
+      throw new Error(
+        `[copilot-cli] session "${sessionKeyName}" rejected REDACTED does not match conversation whitelist`,
+      );
+    }
+  }
+
+  /**
    * Send a user message to Copilot CLI with KSSP suffix.
    * Detects if the agent is at an ask_user prompt and handles
    * navigation to freeform input when showing options.
@@ -463,11 +476,9 @@ export class CopilotCliAdapter implements AgentAdapter {
     text: string,
     sessionKey?: string,
   ): Promise<void> {
-    // Check KPSS whitelist REDACTED only append suffix for whitelisted sessions
+    // KPSS suffix: always enabled here since validateSession() already
+    // rejected non-whitelisted sessions before we reach sendMessage.
     const kpssEnabled = this.isKpssEnabled(sessionKey);
-    if (!kpssEnabled && this.kpssNonWhitelistBehavior === "reject") {
-      throw new Error(`[copilot-cli] session key "${sessionKey}" does not match KPSS whitelist REDACTED rejected`);
-    }
     const messageText = kpssEnabled ? text + KSSP_SUFFIX : text;
 
     // Check if agent is at an ask_user prompt REDACTED route user's message through it.

@@ -186,6 +186,13 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // for KPSS whitelist matching.
         const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
 
+        // Step 4.2: Let the adapter reject sessions it shouldn't handle.
+        // E.g., tmux-copilot rejects cron/subagent sessions so the gateway
+        // falls back to the next model candidate (tmux-cc).
+        if (adapter?.validateSession) {
+          adapter.validateSession(sessionKeyName ?? sessionId);
+        }
+
         // Step 4.5: Get or create the agent session
         const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter, agentAccountId ?? undefined);
         cancelSession = session;
