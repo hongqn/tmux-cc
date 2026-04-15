@@ -81,9 +81,10 @@ export interface CopilotCliAdapterOptions {
    * Behavior for sessions not matching the KPSS whitelist.
    * - "no-kpss": Don't append KPSS suffix, allow normal cleanup.
    * - "reject": Refuse to serve the request (throw an error).
+   * - { fallback: "model-id" }: Route to a fallback adapter with the given model.
    * Default: "no-kpss"
    */
-  kpssNonWhitelistBehavior?: "no-kpss" | "reject";
+  kpssNonWhitelistBehavior?: "no-kpss" | "reject" | { fallback: string };
 }
 
 /**
@@ -260,7 +261,7 @@ export class CopilotCliAdapter implements AgentAdapter {
   private readonly maxHeapMB: number;
   private readonly pluginDir: string;
   private readonly kpssSessionWhitelist: string[];
-  private readonly kpssNonWhitelistBehavior: "no-kpss" | "reject";
+  private readonly kpssNonWhitelistBehavior: "no-kpss" | "reject" | { fallback: string };
 
   constructor(opts: CopilotCliAdapterOptions = {}) {
     this.copilotCommand = opts.copilotCommand ?? "copilot";
@@ -453,16 +454,26 @@ export class CopilotCliAdapter implements AgentAdapter {
   // REDACTED Message Sending REDACTED
 
   /**
-   * Reject sessions that don't match the KPSS whitelist.
+   * Reject or redirect sessions that don't match the KPSS whitelist.
    * Called early, before tmux window allocation, so the gateway can
    * fall back to another provider (e.g., tmux-cc for cron sessions).
+   *
+   * Returns `{ fallback: modelId }` when a non-whitelisted session should
+   * be routed to a fallback adapter instead of being rejected outright.
    */
-  validateSession(sessionKeyName?: string): void {
-    if (!this.isKpssEnabled(sessionKeyName)) {
+  validateSession(sessionKeyName?: string): { fallback: string } | void {
+    if (this.isKpssEnabled(sessionKeyName)) return;
+
+    if (typeof this.kpssNonWhitelistBehavior === "object") {
+      return { fallback: this.kpssNonWhitelistBehavior.fallback };
+    }
+
+    if (this.kpssNonWhitelistBehavior === "reject") {
       throw new Error(
         `[copilot-cli] session "${sessionKeyName}" rejected REDACTED does not match conversation whitelist`,
       );
     }
+    // "no-kpss": proceed without KPSS
   }
 
   /**

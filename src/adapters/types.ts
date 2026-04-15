@@ -88,11 +88,13 @@ export interface AgentAdapter {
 
   /**
    * Validate whether this adapter should handle the given session.
-   * Throw an error to reject the session REDACTED the gateway will try fallback providers.
+   * - Return `void`/`undefined` to accept the session normally.
+   * - Return `{ fallback: modelId }` to route to the fallback adapter.
+   * - Throw an error to reject outright (gateway tries fallback providers).
    *
    * Called early in the stream function, before allocating a tmux window.
    */
-  validateSession?(sessionKeyName?: string): void;
+  validateSession?(sessionKeyName?: string): { fallback: string } | void;
 
   /**
    * Send a user message to the agent, handling any agent-specific UI state

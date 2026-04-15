@@ -49,6 +49,8 @@ export interface StreamFnOptions {
   config: TmuxClaudeConfig;
   /** Agent adapter for agent-specific operations. */
   adapter?: AgentAdapter;
+  /** Fallback adapter used when the primary adapter's validateSession returns a fallback. */
+  fallbackAdapter?: AgentAdapter;
   /** Provider ID (e.g., "tmux-cc", "tmux-copilot") REDACTED used in response metadata. */
   providerId?: string;
 }
@@ -101,7 +103,8 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
  */
 export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
   const config = { ...DEFAULT_CONFIG, ...opts.config };
-  const adapter = opts.adapter;
+  const primaryAdapter = opts.adapter;
+  const fallbackAdapter = opts.fallbackAdapter;
   const providerId = opts.providerId ?? "tmux-cc";
 
   return (_model: unknown, context: Context, options?: Record<string, unknown>) => {
@@ -157,6 +160,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     const run = async () => {
       let streamStarted = false;
       let thinkingStartEmitted = false;
+      // Mutable: may switch to fallbackAdapter when validateSession returns a fallback
+      let adapter = primaryAdapter;
+      let runConfig = config;
       try {
         // Step 1: Derive a stable session key from the conversation
         const sessionKey = deriveSessionKey(context.messages, sessionId);
@@ -186,15 +192,20 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // for KPSS whitelist matching.
         const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
 
-        // Step 4.2: Let the adapter reject sessions it shouldn't handle.
-        // E.g., tmux-copilot rejects cron/subagent sessions so the gateway
-        // falls back to the next model candidate (tmux-cc).
+        // Step 4.2: Let the adapter reject or redirect sessions it shouldn't handle.
+        // E.g., tmux-copilot redirects cron/subagent sessions to the Claude Code
+        // adapter, or rejects them so the gateway falls back.
         if (adapter?.validateSession) {
-          adapter.validateSession(sessionKeyName ?? sessionId);
+          const validation = adapter.validateSession(sessionKeyName ?? sessionId);
+          if (validation?.fallback && fallbackAdapter) {
+            console.log(`[tmux-cc] session "${sessionKeyName}" not whitelisted, falling back to ${fallbackAdapter.id} model=${validation.fallback}`);
+            adapter = fallbackAdapter;
+            runConfig = { ...config, defaultModel: validation.fallback };
+          }
         }
 
         // Step 4.5: Get or create the agent session
-        const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter, agentAccountId ?? undefined);
+        const session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
         cancelSession = session;
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 

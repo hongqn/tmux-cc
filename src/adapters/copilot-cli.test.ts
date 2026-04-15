@@ -60,14 +60,45 @@ describe("CopilotCliAdapter", () => {
       expect(sentText).not.toContain("Use the ask user tool");
     });
 
-    it("throws error for non-whitelisted session via validateSession", () => {
+    it("throws error for non-whitelisted session when behavior is reject", () => {
       const adapter = new CopilotCliAdapter({
         kpssSessionWhitelist: ["*telegram*"],
+        kpssNonWhitelistBehavior: "reject",
       });
 
       expect(() =>
         adapter.validateSession("agent:main:cron:abc-123"),
       ).toThrow("rejected");
+    });
+
+    it("returns fallback info for non-whitelisted session when fallback configured", () => {
+      const adapter = new CopilotCliAdapter({
+        kpssSessionWhitelist: ["*telegram*"],
+        kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
+      });
+
+      const result = adapter.validateSession("agent:main:cron:abc-123");
+      expect(result).toEqual({ fallback: "sonnet-4.6" });
+    });
+
+    it("returns undefined for non-whitelisted session when behavior is no-kpss", () => {
+      const adapter = new CopilotCliAdapter({
+        kpssSessionWhitelist: ["*telegram*"],
+        kpssNonWhitelistBehavior: "no-kpss",
+      });
+
+      const result = adapter.validateSession("agent:main:cron:abc-123");
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined for whitelisted session regardless of behavior", () => {
+      const adapter = new CopilotCliAdapter({
+        kpssSessionWhitelist: ["*telegram*"],
+        kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
+      });
+
+      const result = adapter.validateSession("agent:main:telegram:123");
+      expect(result).toBeUndefined();
     });
 
     it("matches multiple whitelist patterns", async () => {

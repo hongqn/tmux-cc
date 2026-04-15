@@ -44,6 +44,7 @@ function registerAdapterProvider(
   providerId: string,
   label: string,
   adapter: AgentAdapter,
+  fallbackAdapter?: AgentAdapter,
 ) {
   api.registerProvider({
     id: providerId,
@@ -139,6 +140,7 @@ function registerAdapterProvider(
           defaultModel: ctx.modelId,
         },
         adapter,
+        fallbackAdapter,
         providerId,
       });
     },
@@ -164,9 +166,10 @@ export default definePluginEntry({
         // Only enable KPSS (keep-persistent-session) for interactive chat sessions.
         // Cron, subagent, and other one-shot sessions should not be kept alive.
         kpssSessionWhitelist: ["*telegram*", "*main"],
-        kpssNonWhitelistBehavior: "no-kpss",
+        // Non-whitelisted sessions (cron, subagent) fall back to Claude Code.
+        kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
       });
-      registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter);
+      registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter, claudeAdapter);
     } catch (err) {
       console.error(`[tmux-cc] failed to register ${COPILOT_PROVIDER_ID}:`, err);
     }
