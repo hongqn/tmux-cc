@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { getOrCreateSession, resolveAgentId, restartSession, scheduleEagerCleanup } from "./session-map.js";
+import { getOrCreateSession, resolveAgentId, resolveSessionKeyName, restartSession, scheduleEagerCleanup } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -182,6 +182,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 4: Resolve agent account ID for MCP tools
         const agentAccountId = await resolveAgentId(sessionId);
 
+        // Step 4.1: Resolve the openclaw session key name (e.g. "agent:myagent:main")
+        // for KPSS whitelist matching.
+        const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
+
         // Step 4.5: Get or create the agent session
         const session = await getOrCreateSession(sessionKey, config.defaultModel, config, adapter, agentAccountId ?? undefined);
         cancelSession = session;
@@ -255,7 +259,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         try {
           if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionId);
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
           } else {
             await sendKeys(config.tmuxSession, session.windowName, finalText);
           }
@@ -411,7 +415,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                   console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
                   try {
                     if (adapter?.sendMessage) {
-                      await adapter.sendMessage(config.tmuxSession, session.windowName, text, sessionId);
+                      await adapter.sendMessage(config.tmuxSession, session.windowName, text, sessionKeyName ?? sessionId);
                     } else {
                       await sendKeys(config.tmuxSession, session.windowName, text);
                     }
@@ -450,11 +454,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
           if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionId);
+            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
           } else {
             await sendKeys(config.tmuxSession, session.windowName, finalText);
           }
-
           response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled, checkSteering);
         }
 

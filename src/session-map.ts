@@ -29,7 +29,7 @@ import { DEFAULT_CONFIG } from "./types.js";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 
 /** Unique ID for this module instance REDACTED detects multiple module loads. */
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
@@ -84,6 +84,44 @@ export async function resolveAgentId(gatewaySessionId: string | undefined): Prom
     }
   } catch {
     // agents dir doesn't exist
+  }
+  return null;
+}
+
+/** Cache of gateway sessionId REDACTED openclaw session key name (e.g. "agent:myagent:main"). */
+const sessionKeyNameCache = new Map<string, string>();
+
+/**
+ * Resolve the OpenClaw session key name from a gateway session UUID.
+ *
+ * Looks up the agent's sessions.json to find the key (e.g., "agent:myagent:main",
+ * "agent:myagent:telegram:slash:123") that maps to the given UUID.
+ *
+ * This key name is what the KPSS whitelist patterns (like "*telegram*", "*main")
+ * were designed to match against.
+ */
+export async function resolveSessionKeyName(
+  gatewaySessionId: string | undefined,
+  agentId: string | undefined,
+): Promise<string | null> {
+  if (!gatewaySessionId || !agentId) return null;
+
+  const cacheKey = `${agentId}:${gatewaySessionId}`;
+  const cached = sessionKeyNameCache.get(cacheKey);
+  if (cached) return cached;
+
+  const sessionsFile = join(homedir(), ".openclaw", "agents", agentId, "sessions", "sessions.json");
+  try {
+    const data = JSON.parse(await readFile(sessionsFile, "utf-8"));
+    for (const [keyName, entry] of Object.entries(data)) {
+      if ((entry as { sessionId?: string }).sessionId === gatewaySessionId) {
+        sessionKeyNameCache.set(cacheKey, keyName);
+        console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} REDACTED ${keyName}`);
+        return keyName;
+      }
+    }
+  } catch {
+    // sessions.json doesn't exist or isn't readable
   }
   return null;
 }
