@@ -49,12 +49,26 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Ensure the tmux session exists. Creates it in detached mode if needed.
+ *
+ * On Linux, uses `systemd-run --user --scope` so the tmux server lives
+ * in its own cgroup and survives gateway service restarts (systemd's
+ * default KillMode=control-group would otherwise kill it).
  */
 export async function ensureTmuxSession(sessionName: string): Promise<void> {
   try {
     await exec(`tmux has-session -t ${shellEscape(sessionName)} 2>/dev/null`);
   } catch {
-    await exec(`tmux new-session -d -s ${shellEscape(sessionName)}`);
+    const newSessionCmd = `tmux new-session -d -s ${shellEscape(sessionName)}`;
+    if (process.platform === "linux") {
+      try {
+        await exec(`systemd-run --user --scope -- ${newSessionCmd}`);
+        console.log(`[tmux-cc] ensureTmuxSession: created in systemd scope, session=${sessionName}`);
+        return;
+      } catch (e) {
+        console.log(`[tmux-cc] ensureTmuxSession: systemd-run failed, falling back to direct: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+    await exec(newSessionCmd);
   }
 }
 
