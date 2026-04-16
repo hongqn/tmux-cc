@@ -81,6 +81,13 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
   const args = [
     opts.claudeCommand,
     "--dangerously-skip-permissions",
+    // Disable AskUserQuestion: CC is used here only for one-shot fallback
+    // tasks (rate-limit or non-whitelisted/cron routing), so there is no
+    // reason to let the agent pause on an interactive option selector.
+    // Avoiding the tool also avoids the routing complexity of sendKeys
+    // vs. the selector UI REDACTED plain sendKeys always works on text prompts.
+    "--disallowedTools",
+    "AskUserQuestion",
     "--model",
     windowOpts.model,
   ];
