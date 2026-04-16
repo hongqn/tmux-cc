@@ -18,6 +18,7 @@ import {
   isClaudeProcessing,
   sendKeys,
   sendTmuxKey,
+  capturePane,
 } from "../tmux-manager.js";
 import {
   getExistingTranscriptPaths as trGetExistingPaths,
@@ -209,12 +210,94 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     await sendKeys(tmuxSession, windowName, `/model ${this.resolveModelId(model)}`);
   }
 
+  /**
+   * Send a user message, routing it through CC's AskUserQuestion UI when
+   * one is active.
+   *
+   * Without routing, plain sendKeys at an AskUserQuestion prompt has the
+   * Enter key select whichever option is currently highlighted REDACTED the
+   * typed characters can either be ignored or fuzzy-match an option, and
+   * the agent sees `User answered Claude's questions: Q REDACTED <wrong option>`
+   * instead of the user's actual message. This is the same failure mode
+   * the Copilot adapter already avoids for its own ask_user UI.
+   *
+   * CC's AskUserQuestion TUI lays out options as:
+   *   REDACTED 1. <agent option 1>
+   *     2. <agent option 2>
+   *     ...
+   *     N+1. Type something.    <-- we navigate here to open freeform input
+   *   REDACTED
+   *     N+2. Chat about this
+   *
+   * We locate "Type something." by its line marker, navigate to it, press
+   * Enter to open the freeform input, then type the user's message.
+   */
+  async sendMessage(
+    tmuxSession: string,
+    windowName: string,
+    text: string,
+    _sessionKey?: string,
+  ): Promise<void> {
+    const pane = await capturePane(tmuxSession, windowName, 50);
+    if (pane && this.isAskUserQuestionPrompt(pane)) {
+      const typeSomethingIdx = this.findTypeSomethingOptionIndex(pane);
+      if (typeSomethingIdx > 0) {
+        console.log(`[claude-code] AskUserQuestion: routing text to option ${typeSomethingIdx} (Type something)`);
+        // Navigate down (typeSomethingIdx - 1) times since the selector
+        // starts at option 1.
+        for (let i = 0; i < typeSomethingIdx - 1; i++) {
+          await sendTmuxKey(tmuxSession, windowName, "Down");
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        await sendTmuxKey(tmuxSession, windowName, "Enter");
+        await new Promise((r) => setTimeout(r, 500));
+        await sendKeys(tmuxSession, windowName, text);
+        return;
+      }
+      console.log(`[claude-code] AskUserQuestion detected but could not locate 'Type something' option; falling back to plain sendKeys`);
+    }
+    await sendKeys(tmuxSession, windowName, text);
+  }
+
+  /**
+   * Detect CC's AskUserQuestion selector by its navigation hint plus
+   * the "Type something." meta-option which is always present. Both
+   * signals together avoid false positives on bypass / trust prompts.
+   */
+  private isAskUserQuestionPrompt(pane: string): boolean {
+    return (
+      pane.includes("REDACTED/REDACTED to navigate") &&
+      pane.includes("Esc to cancel") &&
+      pane.includes("Type something")
+    );
+  }
+
+  /**
+   * Extract the option number of the "Type something." row from the
+   * captured pane. CC renders it like "  3. Type something." with leading
+   * whitespace and an optional "REDACTED" selector marker; we accept both.
+   */
+  private findTypeSomethingOptionIndex(pane: string): number {
+    const m = pane.match(/^\s*[REDACTED>]?\s*(\d+)\.\s*Type something/m);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+
+  /** Detect that CC is paused on an AskUserQuestion REDACTED used by KPSS cleanup protection. */
+  async isWaitingForUserInput(tmuxSession: string, windowName: string): Promise<boolean> {
+    try {
+      const pane = await capturePane(tmuxSession, windowName, 30);
+      if (!pane) return false;
+      return this.isAskUserQuestionPrompt(pane);
+    } catch {
+      return false;
+    }
+  }
+
   async handleBlockingPrompts(
     tmuxSession: string,
     windowName: string,
   ): Promise<void> {
     try {
-      const { capturePane } = await import("../tmux-manager.js");
       const content = await capturePane(tmuxSession, windowName, 20);
       if (!content) return;
 
