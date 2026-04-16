@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { getOrCreateSession, resolveAgentId, resolveSessionKeyName, restartSession, scheduleEagerCleanup } from "./session-map.js";
+import { deleteSession, getOrCreateSession, resolveAgentId, resolveSessionKeyName, restartSession, scheduleEagerCleanup } from "./session-map.js";
 import { persistSession } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -205,7 +205,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         // Step 4.5: Get or create the agent session
-        const session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
+        // `session` is mutable so the rate-limit mid-stream fallback (below)
+        // can tear down the current window and swap to the fallback adapter.
+        let session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
         cancelSession = session;
         console.log(`[tmux-cc] session: window=${session.windowName}, transcriptPath=${session.transcriptPath ?? "null"}, claudeSessionId=${session.claudeSessionId ?? "null"}, snapshotSize=${session.existingTranscriptPaths?.size ?? "none"}`);
 
@@ -519,7 +521,40 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // but returned an error message from the model provider).
         if (response.text && containsRateLimitError(response.text)) {
           console.log(`[tmux-cc] rate limit detected in response text for model=${session.model}`);
-          adapter?.recordRateLimit?.(session.model);
+          primaryAdapter?.recordRateLimit?.(session.model);
+
+          // Mid-stream fallback: if we have a fallback adapter and we're
+          // currently on the primary, tear down the rate-limited window
+          // and retry this same user message via the fallback adapter so
+          // the user doesn't have to re-send. Subsequent messages route
+          // through the fallback automatically (recordRateLimit sets a
+          // cooldown that validateSession observes on the next turn).
+          if (fallbackAdapter && adapter === primaryAdapter) {
+            const validation = primaryAdapter?.validateSession?.(sessionKeyName ?? sessionId, session.model);
+            if (validation && validation.fallback) {
+              console.log(`[tmux-cc] mid-stream swap to ${fallbackAdapter.id} model=${validation.fallback}`);
+              await deleteSession(sessionKey, config);
+              adapter = fallbackAdapter;
+              runConfig = { ...config, defaultModel: validation.fallback };
+              session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
+              cancelSession = session;
+              console.log(`[tmux-cc] fallback session: window=${session.windowName}, model=${session.model}`);
+              if (adapter.sendMessage) {
+                await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
+              } else {
+                await sendKeys(config.tmuxSession, session.windowName, finalText);
+              }
+              // Re-poll against the fresh session. Start from offset 0 REDACTED
+              // updateTranscriptPath will re-discover via the snapshot.
+              const retryResponse = await pollForResponse(session, 0, runConfig, adapter, onNewEntries, () => cancelled, checkSteering);
+              if (retryResponse?.text) {
+                response = retryResponse;
+                console.log(`[tmux-cc] mid-stream fallback retry succeeded, textLen=${response.text.length}`);
+              } else {
+                console.error(`[tmux-cc] mid-stream fallback retry produced no response; emitting original rate-limit error`);
+              }
+            }
+          }
         }
 
         // Step 9: Emit the response as structured stream close events.

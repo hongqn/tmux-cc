@@ -114,6 +114,33 @@ describe("copilot-transcript-reader", () => {
       expect(entry!.subtype).toBe("turn_duration");
     });
 
+    it("parses session.error (rate_limit) as a completed assistant entry with error text", () => {
+      // Real Copilot rate-limit events from events.jsonl REDACTED the agent
+      // never writes assistant.message, only turn_start/turn_end +
+      // session.error. Without this mapping the poller would hang
+      // on an empty turn and the rate-limit cooldown would never fire.
+      const event = JSON.stringify({
+        type: "session.error",
+        data: {
+          errorType: "rate_limit",
+          message:
+            "Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period.",
+          sessionId: "abc-123",
+        },
+        timestamp: "2026-04-10T00:02:00.000Z",
+      });
+      const entry = parseEvent(event);
+      expect(entry).not.toBeNull();
+      expect(entry!.type).toBe("assistant");
+      // stop_reason must NOT be "tool_use" so extractAssistantResponse
+      // treats it as complete.
+      expect(entry!.stop_reason).toBe("end_turn");
+      const textBlock = entry!.message.content[0];
+      expect(textBlock.type).toBe("text");
+      expect((textBlock as { type: "text"; text: string }).text).toContain("rate_limit");
+      expect((textBlock as { type: "text"; text: string }).text).toContain("rate limit");
+    });
+
     it("ignores session.start events", () => {
       const event = JSON.stringify({
         type: "session.start",

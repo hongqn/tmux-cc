@@ -243,6 +243,8 @@ export function parseEvent(line: string): TranscriptEntry | null {
           subtype: "turn_duration",
           timestamp: event.timestamp,
         };
+      case "session.error":
+        return parseSessionError(event, sessionId);
       default:
         return null;
     }
@@ -265,6 +267,33 @@ function parseUserMessage(event: CopilotEvent, sessionId: string): TranscriptEnt
     },
     sessionId,
     timestamp: event.timestamp,
+  };
+}
+
+/**
+ * Synthesize a completed assistant entry from a session.error event. Without
+ * this, Copilot CLI failures like rate limits show a message in the TUI but
+ * never land as `assistant.message` events REDACTED the poller would hang on an
+ * empty turn and `containsRateLimitError` (which looks at response.text)
+ * would never trigger the adapter's recordRateLimit hook.
+ *
+ * The synthetic entry carries the error message as text and stop_reason
+ * "end_turn" so extractAssistantResponse returns a complete response and
+ * the stream-fn rate-limit-detection path runs normally.
+ */
+function parseSessionError(event: CopilotEvent, sessionId: string): TranscriptEntry {
+  const errorType = (event.data?.errorType as string) ?? "unknown";
+  const message = (event.data?.message as string) ?? "Copilot CLI session error";
+  // Prefix with errorType so containsRateLimitError patterns (rate.?limit,
+  // 429, overloaded, REDACTED) match for all the relevant classifications even
+  // when the message text is localized or phrased unusually.
+  const text = `[${errorType}] ${message}`;
+  return {
+    type: "assistant",
+    message: { content: [{ type: "text", text }] },
+    sessionId,
+    timestamp: event.timestamp,
+    stop_reason: "end_turn",
   };
 }
 

@@ -139,6 +139,27 @@ export function windowNameFromSessionKey(sessionKey: string): string {
 /**
  * Get the current session state for a session key, or null if none exists.
  */
+/**
+ * Kill a session's tmux window and drop it from the in-memory map.
+ * Used by mid-stream fallback, where we need to tear down the primary
+ * adapter's window so the next getOrCreateSession allocates a fresh
+ * one (with the fallback adapter) instead of reusing the existing one.
+ */
+export async function deleteSession(
+  sessionKey: string,
+  config: TmuxClaudeConfig = {},
+): Promise<void> {
+  const state = sessions.get(sessionKey);
+  if (!state) return;
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  try {
+    await killWindow(mergedConfig.tmuxSession, state.windowName);
+  } catch {
+    // Window may already be gone
+  }
+  sessions.delete(sessionKey);
+}
+
 export function getSession(sessionKey: string): SessionState | null {
   return sessions.get(sessionKey) ?? null;
 }
