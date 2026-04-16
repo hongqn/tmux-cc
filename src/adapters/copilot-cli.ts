@@ -55,6 +55,19 @@ const DEFAULT_MAX_HEAP_MB = 1024;
 const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
 
 /**
+ * Substrings that identify a rendered ask_user selector. Copilot's TUI has
+ * evolved across versions: older builds say "REDACTED to select", newer builds
+ * say "REDACTED/REDACTED to navigate". We match either so upgrades don't silently break
+ * ask_user routing.
+ */
+const ASK_USER_SELECTOR_HINTS = ["REDACTED to select", "REDACTED/REDACTED to navigate"];
+
+/** Whether a pane contains a rendered ask_user option list. */
+function hasAskUserSelector(pane: string): boolean {
+  return ASK_USER_SELECTOR_HINTS.some((h) => pane.includes(h));
+}
+
+/**
  * Keep-session prompt (KSSP) suffix appended to every user message.
  * Instructs the agent to call ask_user at the end of each response,
  * keeping the turn alive to avoid per-request billing.
@@ -407,7 +420,7 @@ export class CopilotCliAdapter implements AgentAdapter {
       const content = await capturePane(tmuxSession, windowName);
       // Interactive ask_user prompts show "Esc to cancel" alongside selection UI.
       // These are NOT processing REDACTED the agent is waiting for user input.
-      if (content.includes("REDACTED to select") || content.includes("Enter to confirm")) {
+      if (hasAskUserSelector(content) || content.includes("Enter to confirm")) {
         return false;
       }
       // Copilot shows "Esc to cancel" (or "esc to int" in some versions) while processing
@@ -550,15 +563,15 @@ export class CopilotCliAdapter implements AgentAdapter {
     if (pane && this.isAskUserPrompt(pane)) {
       // When "REDACTED Asking user" appears but the selection box hasn't rendered yet,
       // wait up to 5s for it to appear before falling back to freeform.
-      if (pane.includes("REDACTED Asking user") && !pane.includes("REDACTED to select")) {
+      if (pane.includes("REDACTED Asking user") && !hasAskUserSelector(pane)) {
         for (let waitMs = 0; waitMs < 5000; waitMs += 500) {
           await sleep(500);
           pane = await capturePane(tmuxSession, windowName, 50) || '';
-          if (pane.includes("REDACTED to select")) break;
+          if (hasAskUserSelector(pane)) break;
         }
       }
 
-      if (pane.includes("REDACTED to select")) {
+      if (hasAskUserSelector(pane)) {
         // Options variant REDACTED navigate to "Other (type your answer)" and type answer
         const optionCount = this.countAskUserOptions(pane);
         console.log(`[copilot-cli] ask_user prompt with ${optionCount} options, routing text to Other`);
@@ -590,6 +603,9 @@ export class CopilotCliAdapter implements AgentAdapter {
    * Count the number of options in an ask_user prompt.
    * Options look like: "REDACTED 1. Label" or "  2. Label" etc.
    * Lines may be inside a box border (REDACTED prefix).
+   *
+   * The freeform-input fallback label is "Other (typeREDACTED)" in older Copilot
+   * builds and "Type something" in newer ones REDACTED both are counted.
    */
   private countAskUserOptions(paneContent: string): number {
     const lines = paneContent.split("\n");
@@ -597,7 +613,11 @@ export class CopilotCliAdapter implements AgentAdapter {
     for (const line of lines) {
       // Strip box border characters before matching
       const stripped = line.replace(/^[REDACTED|]+\s*/, '');
-      if (/^[REDACTED>]?\s*\d+\.\s/.test(stripped) || /^[REDACTED>]?\s*Other[\s(]/.test(stripped)) {
+      if (
+        /^[REDACTED>]?\s*\d+\.\s/.test(stripped) ||
+        /^[REDACTED>]?\s*Other[\s(]/.test(stripped) ||
+        /^[REDACTED>]?\s*Type something/.test(stripped)
+      ) {
         count++;
       }
     }
@@ -606,11 +626,11 @@ export class CopilotCliAdapter implements AgentAdapter {
 
   /**
    * Detect if the pane shows an ask_user prompt (options or freeform).
-   * The bordered box with "REDACTED to select" or "REDACTED Asking user" is reliable.
+   * The bordered box with a selector hint or "REDACTED Asking user" is reliable.
    */
   private isAskUserPrompt(paneContent: string): boolean {
-    // Options variant: bordered box with selector
-    if (paneContent.includes("REDACTED to select") && paneContent.includes("Esc to cancel")) {
+    // Options variant: bordered box with selector (old or new TUI strings)
+    if (hasAskUserSelector(paneContent) && paneContent.includes("Esc to cancel")) {
       return true;
     }
     // Freeform variant or generic: "REDACTED Asking user" indicator

@@ -202,6 +202,25 @@ export function readNewEntries(transcriptPath: string, offset: number): Transcri
 }
 
 /**
+ * Join question prompts from an AskUserQuestion tool input. The schema is:
+ *   { questions: [{ question: string, header?: string, options?: [...] }, ...] }
+ * We include only the `question` strings so the response text stays concise;
+ * options are visible in the TUI selector, not relayed downstream.
+ */
+function extractAskUserQuestionText(input: Record<string, unknown>): string | null {
+  const questions = input?.questions;
+  if (!Array.isArray(questions)) return null;
+  const parts: string[] = [];
+  for (const q of questions) {
+    if (q && typeof q === "object") {
+      const text = (q as Record<string, unknown>).question;
+      if (typeof text === "string" && text.trim()) parts.push(text);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+/**
  * Parse a single JSONL line into a TranscriptEntry.
  * Returns null if parsing fails or the entry type is unknown.
  *
@@ -256,12 +275,35 @@ export function parseLine(line: string): TranscriptEntry | null {
     }
     // Note: stop_reason: null is left as undefined REDACTED ambiguous without turn_duration
 
+    const normalizedContent: TranscriptContentBlock[] =
+      typeof content === "string" ? [{ type: "text", text: content }] : (content ?? []);
+
+    // AskUserQuestion is Claude Code's built-in turn-terminating tool:
+    // when the agent calls it, the turn is effectively complete (agent is
+    // waiting for user input). The CC transcript records this as an
+    // ordinary tool_use entry with stop_reason="tool_use", which would
+    // otherwise make us poll forever. Re-tag it as "ask_user" so the
+    // completion detection treats it as a finished turn.
+    if (type === "assistant" && stopReason === "tool_use") {
+      const askUserBlock = normalizedContent.find(
+        (b): b is Extract<TranscriptContentBlock, { type: "tool_use" }> =>
+          b.type === "tool_use" && b.name === "AskUserQuestion",
+      );
+      if (askUserBlock) {
+        stopReason = "ask_user";
+        // Surface the question(s) as text so the response emitted to the
+        // user includes them, mirroring Copilot CLI's ask_user handling.
+        const questionText = extractAskUserQuestionText(askUserBlock.input);
+        if (questionText) {
+          normalizedContent.push({ type: "text", text: `\n\n${questionText}` });
+        }
+      }
+    }
+
     // Build normalized entry
     const entry: TranscriptEntry = {
       type,
-      message: {
-        content: typeof content === "string" ? [{ type: "text", text: content }] : (content ?? []),
-      },
+      message: { content: normalizedContent },
       sessionId: (parsed.sessionId as string) ?? "",
       cwd: parsed.cwd as string | undefined,
       timestamp: parsed.timestamp as string | undefined,
@@ -316,10 +358,11 @@ export function extractAssistantResponse(
     .slice(scanStart)
     .some((e) => e.type === "system" && e.subtype === "turn_duration");
 
-  // Collect thinking from ALL assistant entries in this turn.
+  // Collect thinking and text from ALL assistant entries in this turn.
   // Normal mode: take text only from the LAST assistant entry (the final answer).
   // collectAllText mode: take text from ALL assistant entries (for CC death recovery
-  // where the last entry might be a tool_use with no text).
+  // or ask_user completion, where the tool_use entry has no text but the prose
+  // leading up to it lives in earlier entries).
   const allThinkingParts: string[] = [];
   const allTextParts: string[] = [];
   let lastAssistantIdx = -1;
@@ -334,7 +377,7 @@ export function extractAssistantResponse(
       if (block.type === "thinking") {
         allThinkingParts.push(block.thinking);
       }
-      if (block.type === "text" && opts?.collectAllText) {
+      if (block.type === "text") {
         allTextParts.push(block.text);
       }
     }
@@ -345,8 +388,14 @@ export function extractAssistantResponse(
   }
 
   const lastEntry = entries[lastAssistantIdx];
+  // When the turn ends with an AskUserQuestion tool call, CC splits the
+  // assistant's prose and the tool_use into separate entries REDACTED the last
+  // entry (with the tool_use + injected question text) has no earlier
+  // prose. Fall back to all-text so the user sees the actual answer,
+  // not just the question.
+  const useAllText = opts?.collectAllText || lastEntry.stop_reason === "ask_user";
   const textParts: string[] = [];
-  if (opts?.collectAllText) {
+  if (useAllText) {
     textParts.push(...allTextParts);
   } else {
     for (const block of lastEntry.message.content) {

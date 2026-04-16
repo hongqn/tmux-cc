@@ -16,6 +16,7 @@ import {
   findNewTranscript,
   findGrowingTranscript,
 } from "./transcript-reader.js";
+import type { TranscriptEntry } from "./types.js";
 
 describe("transcript-reader", () => {
   let tempDir: string;
@@ -487,6 +488,82 @@ describe("transcript-reader", () => {
       const response = extractAssistantResponse(entries);
       expect(response.text).toBe("Intermediate text");
       expect(response.isComplete).toBe(false);
+    });
+
+    it("treats AskUserQuestion tool_use as turn completion with surfaced question text", () => {
+      // Real-world CC transcript shape: after the user's message the agent
+      // emits prose, then calls AskUserQuestion as a separate tool_use entry.
+      // The tool_use entry has stop_reason "tool_use" in the raw JSON but
+      // parseLine re-tags it as "ask_user" because the turn is effectively
+      // complete (agent is waiting on the selector).
+      const entries: TranscriptEntry[] = [
+        {
+          type: "user",
+          message: { content: [{ type: "text" as const, text: "Add REDACTED characters" }] },
+          sessionId: "s1",
+        },
+        {
+          type: "assistant",
+          message: { content: [{ type: "text" as const, text: "REDACTED" }] },
+          sessionId: "s1",
+          stop_reason: "tool_use",
+        },
+        {
+          type: "assistant",
+          message: {
+            content: [
+              {
+                type: "tool_use" as const,
+                id: "t1",
+                name: "AskUserQuestion",
+                input: {},
+              },
+              { type: "text" as const, text: "\n\nREDACTEDïREDACTED" },
+            ],
+          },
+          sessionId: "s1",
+          stop_reason: "ask_user",
+        },
+      ];
+
+      const response = extractAssistantResponse(entries);
+      // Both the prose from earlier and the question from the ask_user entry
+      // are relayed so the user sees the full context.
+      expect(response.text).toContain("REDACTED");
+      expect(response.text).toContain("REDACTEDïREDACTED");
+      expect(response.isComplete).toBe(true);
+    });
+
+    it("parseLine re-tags AskUserQuestion tool_use as ask_user and injects question text", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Pick one",
+                    options: [{ label: "A" }, { label: "B" }],
+                  },
+                ],
+              },
+            },
+          ],
+          stop_reason: "tool_use",
+        },
+        sessionId: "s1",
+      });
+      const entry = parseLine(line);
+      expect(entry?.stop_reason).toBe("ask_user");
+      // Question is appended as a text block so extractAssistantResponse
+      // can include it in the relayed response.
+      const textBlocks = entry?.message.content.filter((b) => b.type === "text") ?? [];
+      expect(textBlocks).toHaveLength(1);
+      expect((textBlocks[0] as { type: "text"; text: string }).text).toBe("\n\nPick one");
     });
 
     it("ignores stale assistant entries from a previous turn when a user entry follows", () => {

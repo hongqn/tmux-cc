@@ -144,6 +144,19 @@ describe("CopilotCliAdapter", () => {
       expect(result).toBe(true);
     });
 
+    it("returns true for new TUI string 'Enter to select REDACTED REDACTED/REDACTED to navigate REDACTED Esc to cancel'", async () => {
+      // Newer Copilot builds (and Claude Code's AskUserQuestion UI) render
+      // the selector hint differently. The detection must accept both
+      // variants so we don't silently lose ask_user routing on upgrade.
+      const adapter = new CopilotCliAdapter();
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue(
+        "REDACTED 1. Add more\n  2. Done\n  3. Type something.\nEnter to select REDACTED REDACTED/REDACTED to navigate REDACTED Esc to cancel",
+      );
+
+      const result = await adapter.isWaitingForUserInput("sess", "win");
+      expect(result).toBe(true);
+    });
+
     it("returns true when pane shows asking user indicator", async () => {
       const adapter = new CopilotCliAdapter();
       vi.mocked(tmuxManager.capturePane).mockResolvedValue(
