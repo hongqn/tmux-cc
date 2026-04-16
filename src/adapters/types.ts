@@ -93,8 +93,17 @@ export interface AgentAdapter {
    * - Throw an error to reject outright (gateway tries fallback providers).
    *
    * Called early in the stream function, before allocating a tmux window.
+   *
+   * @param sessionKeyName - OpenClaw session key name for whitelist matching
+   * @param modelId - Requested model ID, used for rate-limit-based fallback
    */
-  validateSession?(sessionKeyName?: string): { fallback: string } | void;
+  validateSession?(sessionKeyName?: string, modelId?: string): { fallback: string } | void;
+
+  /**
+   * Record that a model hit a rate limit, triggering a cooldown period
+   * during which requests for this model will be routed to a fallback adapter.
+   */
+  recordRateLimit?(modelId: string): void;
 
   /**
    * Send a user message to the agent, handling any agent-specific UI state

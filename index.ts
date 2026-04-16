@@ -168,6 +168,11 @@ export default definePluginEntry({
         kpssSessionWhitelist: ["*telegram*", "*main"],
         // Non-whitelisted sessions (cron, subagent) fall back to Claude Code.
         kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
+        // When Copilot hits Anthropic rate limits, fall back to Claude Code
+        // with the equivalent model for 1 hour before retrying.
+        rateLimitFallbackModels: {
+          "claude-opus-4.6": "opus-4.6",
+        },
       });
       registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter, claudeAdapter);
     } catch (err) {

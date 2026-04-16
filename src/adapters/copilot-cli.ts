@@ -51,6 +51,9 @@ const READY_POLL_INTERVAL_MS = 500;
 const READY_TIMEOUT_MS = 120_000; // Copilot CLI loads MCP servers + skills on startup
 const DEFAULT_MAX_HEAP_MB = 1024;
 
+/** Duration to suppress a rate-limited model before retrying (1 hour). */
+const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
+
 /**
  * Keep-session prompt (KSSP) suffix appended to every user message.
  * Instructs the agent to call ask_user at the end of each response,
@@ -85,6 +88,14 @@ export interface CopilotCliAdapterOptions {
    * Default: "no-kpss"
    */
   kpssNonWhitelistBehavior?: "no-kpss" | "reject" | { fallback: string };
+  /**
+   * Map of Copilot model IDs to fallback adapter model IDs for rate limit scenarios.
+   * When a rate limit is detected for a Copilot model, subsequent requests
+   * will be routed to the fallback adapter with the mapped model ID.
+   *
+   * Example: { "claude-opus-4.6": "opus-4.6" }
+   */
+  rateLimitFallbackModels?: Record<string, string>;
 }
 
 /**
@@ -262,6 +273,10 @@ export class CopilotCliAdapter implements AgentAdapter {
   private readonly pluginDir: string;
   private readonly kpssSessionWhitelist: string[];
   private readonly kpssNonWhitelistBehavior: "no-kpss" | "reject" | { fallback: string };
+  private readonly rateLimitFallbackModels: Record<string, string>;
+
+  /** Per-model rate limit cooldown: modelId REDACTED expiry timestamp (ms). */
+  private readonly modelRateLimits = new Map<string, number>();
 
   constructor(opts: CopilotCliAdapterOptions = {}) {
     this.copilotCommand = opts.copilotCommand ?? "copilot";
@@ -269,6 +284,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     this.pluginDir = opts.pluginDir ?? (import.meta.dirname ?? __dirname);
     this.kpssSessionWhitelist = opts.kpssSessionWhitelist ?? [];
     this.kpssNonWhitelistBehavior = opts.kpssNonWhitelistBehavior ?? "no-kpss";
+    this.rateLimitFallbackModels = opts.rateLimitFallbackModels ?? {};
   }
 
   // REDACTED Lifecycle REDACTED
@@ -454,14 +470,35 @@ export class CopilotCliAdapter implements AgentAdapter {
   // REDACTED Message Sending REDACTED
 
   /**
-   * Reject or redirect sessions that don't match the KPSS whitelist.
+   * Reject or redirect sessions that don't match the KPSS whitelist,
+   * or redirect rate-limited models to a fallback adapter.
+   *
    * Called early, before tmux window allocation, so the gateway can
    * fall back to another provider (e.g., tmux-cc for cron sessions).
    *
-   * Returns `{ fallback: modelId }` when a non-whitelisted session should
-   * be routed to a fallback adapter instead of being rejected outright.
+   * Returns `{ fallback: modelId }` when the request should be routed
+   * to a fallback adapter instead of being handled by this adapter.
    */
-  validateSession(sessionKeyName?: string): { fallback: string } | void {
+  validateSession(sessionKeyName?: string, modelId?: string): { fallback: string } | void {
+    // Check rate limit cooldown first REDACTED applies regardless of KPSS whitelist.
+    if (modelId) {
+      const expiresAt = this.modelRateLimits.get(modelId);
+      if (expiresAt) {
+        if (Date.now() < expiresAt) {
+          const fallback = this.rateLimitFallbackModels[modelId];
+          if (fallback) {
+            const remainMin = Math.round((expiresAt - Date.now()) / 60_000);
+            console.log(`[copilot-cli] model ${modelId} rate-limited for ${remainMin}m more, falling back to ${fallback}`);
+            return { fallback };
+          }
+        } else {
+          // Cooldown expired REDACTED clear and retry
+          this.modelRateLimits.delete(modelId);
+          console.log(`[copilot-cli] rate limit cooldown expired for model=${modelId}, retrying`);
+        }
+      }
+    }
+
     if (this.isKpssEnabled(sessionKeyName)) return;
 
     if (typeof this.kpssNonWhitelistBehavior === "object") {
@@ -474,6 +511,21 @@ export class CopilotCliAdapter implements AgentAdapter {
       );
     }
     // "no-kpss": proceed without KPSS
+  }
+
+  /**
+   * Record that a model hit a rate limit. Subsequent requests for this model
+   * will be routed to the fallback adapter for RATE_LIMIT_COOLDOWN_MS (1 hour).
+   */
+  recordRateLimit(modelId: string): void {
+    // Only record if we have a fallback configured for this model
+    if (!this.rateLimitFallbackModels[modelId]) {
+      console.log(`[copilot-cli] rate limit detected for model=${modelId} but no fallback configured, ignoring`);
+      return;
+    }
+    const expiresAt = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+    this.modelRateLimits.set(modelId, expiresAt);
+    console.log(`[copilot-cli] rate limit recorded for model=${modelId}, falling back to ${this.rateLimitFallbackModels[modelId]} until ${new Date(expiresAt).toISOString()}`);
   }
 
   /**

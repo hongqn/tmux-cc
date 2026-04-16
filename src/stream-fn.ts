@@ -194,11 +194,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 4.2: Let the adapter reject or redirect sessions it shouldn't handle.
         // E.g., tmux-copilot redirects cron/subagent sessions to the Claude Code
-        // adapter, or rejects them so the gateway falls back.
+        // adapter, or rate-limited models to the fallback provider.
         if (adapter?.validateSession) {
-          const validation = adapter.validateSession(sessionKeyName ?? sessionId);
+          const validation = adapter.validateSession(sessionKeyName ?? sessionId, config.defaultModel);
           if (validation?.fallback && fallbackAdapter) {
-            console.log(`[tmux-cc] session "${sessionKeyName}" not whitelisted, falling back to ${fallbackAdapter.id} model=${validation.fallback}`);
+            console.log(`[tmux-cc] session "${sessionKeyName}" redirected to ${fallbackAdapter.id} model=${validation.fallback}`);
             adapter = fallbackAdapter;
             runConfig = { ...config, defaultModel: validation.fallback };
           }
@@ -515,6 +515,13 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
         console.log(`[tmux-cc] response: textLen=${response.text.length}, complete=${response.isComplete}, sessionId=${response.sessionId ?? "null"}`);
 
+        // Detect rate limit errors in the response text (agent didn't crash
+        // but returned an error message from the model provider).
+        if (response.text && containsRateLimitError(response.text)) {
+          console.log(`[tmux-cc] rate limit detected in response text for model=${session.model}`);
+          adapter?.recordRateLimit?.(session.model);
+        }
+
         // Step 9: Emit the response as structured stream close events.
         // `start` was emitted in Step 7.5. Thinking events have been
         // emitted during polling via `onNewEntries` as separate blocks.
@@ -788,6 +795,27 @@ export function extractSteeringText(msg: unknown): string | null {
 }
 
 /**
+ * Regex patterns that indicate a rate limit error in agent pane output.
+ * Used to detect when a model provider has throttled requests so we can
+ * activate the cooldown fallback.
+ */
+const RATE_LIMIT_PATTERNS = [
+  /rate.?limit/i,
+  /too many requests/i,
+  /\b429\b/,
+  /overloaded/i,
+  /quota exceeded/i,
+  /request limit/i,
+];
+
+/**
+ * Check if a pane content string contains rate limit error indicators.
+ */
+function containsRateLimitError(content: string): boolean {
+  return RATE_LIMIT_PATTERNS.some(re => re.test(content));
+}
+
+/**
  * Poll the JSONL transcript for a complete assistant response.
  *
  * Polls at the configured interval until either:
@@ -879,6 +907,12 @@ async function pollForResponse(
             }
             if (crashLog && !paneContent) {
               console.error(`[tmux-cc] agent crash log (last 50 lines):\n${crashLog}`);
+            }
+            // Detect rate limit errors and record cooldown on the adapter
+            const diagContent = paneContent || crashLog || '';
+            if (diagContent && containsRateLimitError(diagContent)) {
+              console.log(`[tmux-cc] poll #${pollCount}: rate limit detected in agent output for model=${session.model}`);
+              adapter?.recordRateLimit?.(session.model);
             }
             return null;
           }
@@ -1066,6 +1100,13 @@ async function pollForResponse(
         }
         if (crashLog && !paneContent) {
           console.error(`[tmux-cc] agent crash log (last 50 lines):\n${crashLog}`);
+        }
+
+        // Detect rate limit errors and record cooldown on the adapter
+        const diagContent = paneContent || crashLog || '';
+        if (diagContent && containsRateLimitError(diagContent)) {
+          console.log(`[tmux-cc] poll #${pollCount}: rate limit detected in agent output for model=${session.model}`);
+          adapter?.recordRateLimit?.(session.model);
         }
 
         console.log(`[tmux-cc] re-reading full response from offset ${effectiveOffsetBeforeSend}`);
