@@ -48,40 +48,58 @@ describe("session-persistence", () => {
   });
 
   it("persists and retrieves a session", () => {
-    persistSession("key-1", "claude-session-abc", "sonnet-4.6");
+    persistSession("key-1", "claude-session-abc", "sonnet-4.6", "claude-code");
 
-    const id = getPersistedClaudeSessionId("key-1");
+    const id = getPersistedClaudeSessionId("key-1", "claude-code");
     expect(id).toBe("claude-session-abc");
   });
 
   it("returns undefined for unknown session key", () => {
-    const id = getPersistedClaudeSessionId("nonexistent");
+    const id = getPersistedClaudeSessionId("nonexistent", "claude-code");
     expect(id).toBeUndefined();
   });
 
   it("loads all persisted sessions", () => {
-    persistSession("key-1", "session-1", "sonnet-4.6");
-    persistSession("key-2", "session-2", "opus-4.6");
+    persistSession("key-1", "session-1", "sonnet-4.6", "claude-code");
+    persistSession("key-2", "session-2", "opus-4.6", "claude-code");
 
     const sessions = loadPersistedSessions();
     expect(sessions.size).toBe(2);
-    expect(sessions.get("key-1")?.claudeSessionId).toBe("session-1");
-    expect(sessions.get("key-2")?.claudeSessionId).toBe("session-2");
   });
 
-  it("removes a persisted session", () => {
-    persistSession("key-1", "session-1", "sonnet-4.6");
-    removePersistedSession("key-1");
+  it("scopes persistence by adapter REDACTED Copilot and CC IDs don't cross", () => {
+    // The bug this prevents: mid-stream rate-limit fallback was feeding
+    // Copilot's session id to the CC adapter's --resume, killing the
+    // process on startup because the id doesn't exist in ~/.claude/projects/.
+    persistSession("key-1", "copilot-id", "claude-opus-4.6", "copilot-cli");
+    persistSession("key-1", "cc-id", "opus-4.6", "claude-code");
 
-    const id = getPersistedClaudeSessionId("key-1");
+    expect(getPersistedClaudeSessionId("key-1", "copilot-cli")).toBe("copilot-id");
+    expect(getPersistedClaudeSessionId("key-1", "claude-code")).toBe("cc-id");
+  });
+
+  it("removes a persisted session (specific adapter)", () => {
+    persistSession("key-1", "session-1", "sonnet-4.6", "claude-code");
+    removePersistedSession("key-1", "claude-code");
+
+    const id = getPersistedClaudeSessionId("key-1", "claude-code");
     expect(id).toBeUndefined();
   });
 
-  it("upserts existing session entries", () => {
-    persistSession("key-1", "old-id", "sonnet-4.6");
-    persistSession("key-1", "new-id", "opus-4.6");
+  it("removes all adapter entries when no adapter id is passed (used by before_reset)", () => {
+    persistSession("key-1", "copilot-id", "claude-opus-4.6", "copilot-cli");
+    persistSession("key-1", "cc-id", "opus-4.6", "claude-code");
+    removePersistedSession("key-1");
 
-    const id = getPersistedClaudeSessionId("key-1");
+    expect(getPersistedClaudeSessionId("key-1", "copilot-cli")).toBeUndefined();
+    expect(getPersistedClaudeSessionId("key-1", "claude-code")).toBeUndefined();
+  });
+
+  it("upserts existing session entries", () => {
+    persistSession("key-1", "old-id", "sonnet-4.6", "claude-code");
+    persistSession("key-1", "new-id", "opus-4.6", "claude-code");
+
+    const id = getPersistedClaudeSessionId("key-1", "claude-code");
     expect(id).toBe("new-id");
   });
 
@@ -123,8 +141,8 @@ describe("session-persistence", () => {
     expect(sessions.size).toBe(0);
 
     // Should still be able to persist new sessions
-    persistSession("key-1", "session-1", "sonnet-4.6");
-    expect(getPersistedClaudeSessionId("key-1")).toBe("session-1");
+    persistSession("key-1", "session-1", "sonnet-4.6", "claude-code");
+    expect(getPersistedClaudeSessionId("key-1", "claude-code")).toBe("session-1");
   });
 
   it("handles missing file gracefully", () => {

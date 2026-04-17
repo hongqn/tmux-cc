@@ -262,7 +262,9 @@ async function createNewSession(
   }
 
   // Check if we have a persisted Claude session ID from a previous run.
-  const persistedClaudeId = getPersistedClaudeSessionId(sessionKey);
+  // Scoped by adapter id REDACTED Copilot's session ids live in ~/.copilot/session-state/
+  // and CC's live in ~/.claude/projects/, so crossing them kills --resume.
+  const persistedClaudeId = getPersistedClaudeSessionId(sessionKey, adapter?.id ?? "claude-code");
   console.log(`[tmux-cc] createNewSession: key=${sessionKey}, window=${windowName}, model=${model}, persistedId=${persistedClaudeId ?? "none"}, cwd=${config.workingDirectory}`);
 
   // Snapshot existing transcript files BEFORE creating the window

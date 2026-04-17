@@ -1019,7 +1019,7 @@ async function pollForResponse(
       // Update session ID if discovered
       if (response.sessionId && !session.claudeSessionId) {
         session.claudeSessionId = response.sessionId;
-        persistSession(session.sessionKey, response.sessionId, session.model);
+        persistSession(session.sessionKey, response.sessionId, session.model, session.adapter?.id ?? "claude-code");
       }
 
       if (response.isComplete && response.text) {
@@ -1232,7 +1232,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
           ? adapter.extractSessionId(newPath)
           : trExtractSessionId(newPath);
         if (session.claudeSessionId) {
-          persistSession(session.sessionKey, session.claudeSessionId, session.model);
+          persistSession(session.sessionKey, session.claudeSessionId, session.model, session.adapter?.id ?? "claude-code");
         }
       }
       session.existingTranscriptPaths = undefined;
@@ -1252,7 +1252,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
           ? adapter.extractSessionId(growing.path)
           : trExtractSessionId(growing.path);
         if (session.claudeSessionId) {
-          persistSession(session.sessionKey, session.claudeSessionId, session.model);
+          persistSession(session.sessionKey, session.claudeSessionId, session.model, session.adapter?.id ?? "claude-code");
         }
       }
       session.existingTranscriptPaths = undefined;
@@ -1275,7 +1275,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
         ? adapter.extractSessionId(path)
         : trExtractSessionId(path);
       if (session.claudeSessionId) {
-        persistSession(session.sessionKey, session.claudeSessionId, session.model);
+        persistSession(session.sessionKey, session.claudeSessionId, session.model, session.adapter?.id ?? "claude-code");
       }
     }
   }

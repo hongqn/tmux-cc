@@ -82,11 +82,30 @@ export function loadPersistedSessions(): Map<string, PersistedSession> {
 }
 
 /**
- * Persist a single session entry (upsert).
+ * Build the composite persistence key. Scoping by adapter prevents the
+ * mid-stream fallback path from feeding Copilot's session ID to the CC
+ * adapter (which exits immediately when --resume references a file that
+ * doesn't exist in ~/.claude/projects/), and vice versa.
  */
-export function persistSession(sessionKey: string, claudeSessionId: string, model: string): void {
+function persistKey(sessionKey: string, adapterId: string): string {
+  return `${sessionKey}::${adapterId}`;
+}
+
+function matchesSessionKey(storeKey: string, sessionKey: string): boolean {
+  return storeKey === sessionKey || storeKey.startsWith(`${sessionKey}::`);
+}
+
+/**
+ * Persist a single session entry (upsert), scoped by adapter.
+ */
+export function persistSession(
+  sessionKey: string,
+  claudeSessionId: string,
+  model: string,
+  adapterId: string,
+): void {
   const data = loadRaw();
-  data.sessions[sessionKey] = {
+  data.sessions[persistKey(sessionKey, adapterId)] = {
     claudeSessionId,
     model,
     lastActivityMs: Date.now(),
@@ -95,20 +114,42 @@ export function persistSession(sessionKey: string, claudeSessionId: string, mode
 }
 
 /**
- * Remove a persisted session entry.
+ * Remove persisted session entries for a session key. Without `adapterId`,
+ * removes every adapter-scoped entry for this key (used by before_reset
+ * to wipe a session fully). With `adapterId`, removes only that adapter's
+ * entry.
  */
-export function removePersistedSession(sessionKey: string): void {
+export function removePersistedSession(sessionKey: string, adapterId?: string): void {
   const data = loadRaw();
-  if (sessionKey in data.sessions) {
-    delete data.sessions[sessionKey];
-    save(data);
+  let changed = false;
+  if (adapterId) {
+    const key = persistKey(sessionKey, adapterId);
+    if (key in data.sessions) {
+      delete data.sessions[key];
+      changed = true;
+    }
+  } else {
+    for (const key of Object.keys(data.sessions)) {
+      if (matchesSessionKey(key, sessionKey)) {
+        delete data.sessions[key];
+        changed = true;
+      }
+    }
   }
+  if (changed) save(data);
 }
 
 /**
- * Look up a persisted Claude session ID for a given session key.
+ * Look up a persisted Claude session ID for a given (sessionKey, adapter)
+ * pair. Legacy un-scoped entries are ignored on purpose REDACTED feeding e.g.
+ * Copilot's session id to the CC adapter's --resume kills the process.
+ * After the first persistSession call with a scoped key, the legacy
+ * entry is orphaned and pruned by the 7-day TTL in loadPersistedSessions.
  */
-export function getPersistedClaudeSessionId(sessionKey: string): string | undefined {
+export function getPersistedClaudeSessionId(
+  sessionKey: string,
+  adapterId: string,
+): string | undefined {
   const data = loadRaw();
-  return data.sessions[sessionKey]?.claudeSessionId;
+  return data.sessions[persistKey(sessionKey, adapterId)]?.claudeSessionId;
 }
