@@ -312,6 +312,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       } else if (content.includes("I trust this folder")) {
         console.log(`[claude-code] auto-dismissing trust prompt`);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
+      } else if (content.includes("How is Claude doing this session")) {
+        // Post-turn feedback survey. If we don't dismiss it, the TUI blocks on
+        // the keypress and no transcript entry is written until the user
+        // answers REDACTED idleCap fires 10 min later. Pick "0: Dismiss".
+        console.log(`[claude-code] auto-dismissing feedback survey`);
+        await sendTmuxKey(tmuxSession, windowName, "0");
       } else if (content.includes("[Pasted text #")) {
         console.log(`[claude-code] pasted text not submitted, sending Enter`);
         await sendTmuxKey(tmuxSession, windowName, "Enter");

@@ -894,8 +894,14 @@ async function pollForResponse(
   let pollCount = 0;
   let lastLogTime = 0;
   const allEntries: TranscriptEntry[] = [];
-  // Track last time we saw real activity (transcript entries or active processing)
+  // Track last time we saw real activity (transcript entries, active processing,
+  // or pane content changes REDACTED the latter covers long Claude thinking turns
+  // where the CLI's status-line timer ticks but no transcript entry is written
+  // and isClaudeProcessing occasionally misses the "esc to int" marker).
   let lastActiveTime = Date.now();
+  // Hash of the last captured pane content REDACTED used to detect visual activity
+  // (spinner/timer ticks, streaming output) when isProcessing is flaky.
+  let lastPaneHash: string | null = null;
 
   // Small initial delay to let Claude Code start processing
   await sleep(500);
@@ -973,6 +979,9 @@ async function pollForResponse(
               } else if (content?.includes("I trust this folder")) {
                 console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+              } else if (content?.includes("How is Claude doing this session")) {
+                console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing feedback survey`);
+                await sendTmuxKey(config.tmuxSession, session.windowName, "0");
               } else if (content?.includes("[Pasted text #")) {
                 console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
@@ -1090,6 +1099,9 @@ async function pollForResponse(
             } else if (content?.includes("I trust this folder")) {
               console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
               await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+            } else if (content?.includes("How is Claude doing this session")) {
+              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing feedback survey`);
+              await sendTmuxKey(config.tmuxSession, session.windowName, "0");
             }
           } catch {
             // Ignore errors from prompt check
@@ -1114,16 +1126,41 @@ async function pollForResponse(
           deadline = Date.now() + config.responseTimeoutMs;
           lastActiveTime = Date.now();
         } else {
-          // Agent is alive but not visibly processing (e.g., waiting for API
-          // response, thinking).  Use a shorter extension so we eventually
-          // time out if truly stuck, but don't cut off a slow API call.
-          // Only extend when close to expiring (< 30s left) to avoid
-          // extending every poll cycle and generating excessive log spam.
-          const remainingMs = deadline - Date.now();
-          if (remainingMs < 30_000) {
-            deadline = Date.now() + ALIVE_IDLE_EXTENSION_MS;
-            const elapsed = Math.round((Date.now() - startTime) / 1000);
-            console.log(`[tmux-cc] poll #${pollCount}: agent alive but idle, extending deadline by ${ALIVE_IDLE_EXTENSION_MS / 1000}s (elapsed=${elapsed}s)`);
+          // Agent is alive but isProcessing didn't see the "esc to interrupt"
+          // marker this tick. That check is a single-frame grep and is known
+          // to miss during long thinking / API waits, so fall back to a
+          // pane-content hash: any visual change (spinner tick, thinking
+          // timer, streaming output) counts as activity and keeps idleCap
+          // from firing on a session that's genuinely still working.
+          let paneChanged = false;
+          try {
+            const pane = await capturePane(config.tmuxSession, session.windowName, 30);
+            if (pane) {
+              const hash = createHash("sha1").update(pane).digest("hex").slice(0, 16);
+              if (lastPaneHash !== null && hash !== lastPaneHash) {
+                paneChanged = true;
+              }
+              lastPaneHash = hash;
+            }
+          } catch {
+            // Ignore capture-pane errors REDACTED we'll fall through to the
+            // existing alive-but-idle handling.
+          }
+
+          if (paneChanged) {
+            deadline = Date.now() + config.responseTimeoutMs;
+            lastActiveTime = Date.now();
+          } else {
+            // Truly idle (pane frozen). Keep the existing short extension
+            // so we eventually time out, but don't cut off a slow API call.
+            // Only extend when close to expiring (< 30s left) to avoid
+            // extending every poll cycle and generating excessive log spam.
+            const remainingMs = deadline - Date.now();
+            if (remainingMs < 30_000) {
+              deadline = Date.now() + ALIVE_IDLE_EXTENSION_MS;
+              const elapsed = Math.round((Date.now() - startTime) / 1000);
+              console.log(`[tmux-cc] poll #${pollCount}: agent alive but idle, extending deadline by ${ALIVE_IDLE_EXTENSION_MS / 1000}s (elapsed=${elapsed}s)`);
+            }
           }
         }
       }
@@ -1176,6 +1213,16 @@ async function pollForResponse(
   const hitIdleCap = (Date.now() - lastActiveTime) >= IDLE_HARD_CAP_MS;
   const capReason = hitAbsoluteCap ? "absoluteCap" : hitIdleCap ? "idleCap" : "deadline";
   console.error(`[tmux-cc] pollForResponse: TIMEOUT after ${pollCount} polls, elapsed=${totalElapsed}s, idle=${idleMs}s, reason=${capReason}, transcriptPath=${session.transcriptPath ?? "null"}`);
+  // Dump pane content on timeout so we can diagnose why the agent went silent
+  // (crash path already does this; mirror it here for idleCap/deadline cases).
+  try {
+    const pane = await capturePane(config.tmuxSession, session.windowName, 30);
+    if (pane) {
+      console.error(`[tmux-cc] agent pane content at timeout (last 30 lines):\n${pane}`);
+    }
+  } catch {
+    // capturePane may fail if the window is gone; ignore.
+  }
   return null;
 }
 
