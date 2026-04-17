@@ -12,8 +12,9 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { ClaudeCodeAdapter } from "./src/adapters/claude-code.js";
 import { CopilotCliAdapter } from "./src/adapters/copilot-cli.js";
 import type { AgentAdapter } from "./src/adapters/types.js";
-import { startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
-import { createTmuxClaudeStreamFn } from "./src/stream-fn.js";
+import { deleteSession, startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
+import { removePersistedSession } from "./src/session-persistence.js";
+import { createTmuxClaudeStreamFn, deriveSessionKey } from "./src/stream-fn.js";
 import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
 
@@ -154,6 +155,25 @@ export default definePluginEntry({
 
   register(api: OpenClawPluginApi) {
     const pluginDir = import.meta.dirname ?? __dirname;
+
+    // Tear down the tmux window and persisted CC/Copilot session ID when
+    // the user issues /new or /reset. Without this hook, the next message
+    // would reuse the existing window because we key by session name (so
+    // gateway-side eviction with new UUIDs preserves context). The hook
+    // lets intentional resets actually create a fresh agent process.
+    api.on("before_reset", async (event, ctx) => {
+      if (!ctx.sessionKey) return;
+      const pluginConfig = getPluginConfig(api.config as unknown as Record<string, unknown>);
+      const mergedConfig = { ...DEFAULT_CONFIG, ...pluginConfig };
+      const tmuxKey = deriveSessionKey([], ctx.sessionKey);
+      console.log(`[tmux-cc] before_reset: clearing window for sessionKeyName=${ctx.sessionKey}, tmuxKey=${tmuxKey}, reason=${event.reason ?? "unknown"}`);
+      removePersistedSession(tmuxKey);
+      try {
+        await deleteSession(tmuxKey, mergedConfig);
+      } catch (err) {
+        console.error(`[tmux-cc] before_reset: deleteSession failed:`, err);
+      }
+    });
 
     // Register Claude Code adapter (tmux-cc provider)
     const claudeAdapter = new ClaudeCodeAdapter({ pluginDir });
