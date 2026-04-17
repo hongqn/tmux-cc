@@ -404,6 +404,14 @@ function discoverTranscript(state: SessionState, workingDirectory: string, adapt
 }
 
 /**
+ * Maximum idle time for KPSS-protected sessions before they get cleaned up
+ * regardless of ask_user state. Without this cap, KPSS sessions accumulate
+ * indefinitely (each Copilot process is ~3 OS processes). Cleaned-up
+ * sessions automatically restore via --resume on the next message.
+ */
+const KPSS_MAX_IDLE_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/**
  * Clean up idle sessions that have exceeded the idle timeout.
  */
 export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promise<number> {
@@ -415,10 +423,10 @@ export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promis
     const idleMs = now - state.lastActivityMs;
     if (idleMs > mergedConfig.idleTimeoutMs) {
       // Check if adapter reports the session is waiting for user input (KPSS).
-      // These sessions stay alive indefinitely REDACTED each logical conversation
-      // maps to exactly one tmux window (via session key name dedup), so
-      // the total count is bounded by the number of active conversations.
-      if (state.adapter?.isWaitingForUserInput) {
+      // Protect these sessions for up to KPSS_MAX_IDLE_MS so multi-turn
+      // conversations aren't killed mid-flow, but still reclaim sessions
+      // that have been idle for hours (they can --resume when needed).
+      if (state.adapter?.isWaitingForUserInput && idleMs < KPSS_MAX_IDLE_MS) {
         try {
           const waiting = await state.adapter.isWaitingForUserInput(mergedConfig.tmuxSession, state.windowName);
           if (waiting) {
