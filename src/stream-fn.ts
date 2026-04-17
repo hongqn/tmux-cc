@@ -1075,37 +1075,38 @@ async function pollForResponse(
             return pendingResponse;
           }
         }
+      }
+
+      // Agent may be stuck at a blocking prompt REDACTED can happen either at the
+      // start of a turn (no entries yet) or mid-turn (e.g., an Edit tool call
+      // that triggers a permission dialog because the target path is outside
+      // the bypass scope). Run the handler unconditionally so mid-turn
+      // prompts are dismissed too.
+      if (adapter) {
+        await adapter.handleBlockingPrompts(config.tmuxSession, session.windowName);
       } else {
-        // No entries at all from this turn REDACTED agent may be stuck at a prompt
-        // (e.g., pasted text not submitted, trust/permissions dialog).
-        // This is critical for existing sessions where transcriptPath is
-        // already set: the discovery-phase prompt check never runs.
-        if (adapter) {
-          await adapter.handleBlockingPrompts(config.tmuxSession, session.windowName);
-        } else {
-          try {
-            const content = await capturePane(config.tmuxSession, session.windowName, 20);
-            if (content?.includes("[Pasted text #")) {
-              console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
-              await sleep(300);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("Do you want to make this edit")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing edit permission prompt`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("I trust this folder")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-            } else if (content?.includes("How is Claude doing this session")) {
-              console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing feedback survey`);
-              await sendTmuxKey(config.tmuxSession, session.windowName, "0");
-            }
-          } catch {
-            // Ignore errors from prompt check
+        try {
+          const content = await capturePane(config.tmuxSession, session.windowName, 20);
+          if (content?.includes("[Pasted text #")) {
+            console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+          } else if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {
+            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing bypass permissions prompt`);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
+            await sleep(300);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+          } else if (content?.includes("Do you want to make this edit")) {
+            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing edit permission prompt`);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+          } else if (content?.includes("I trust this folder")) {
+            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+          } else if (content?.includes("How is Claude doing this session")) {
+            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing feedback survey`);
+            await sendTmuxKey(config.tmuxSession, session.windowName, "0");
           }
+        } catch {
+          // Ignore errors from prompt check
         }
       }
 
