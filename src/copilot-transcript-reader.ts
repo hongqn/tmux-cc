@@ -219,8 +219,10 @@ interface CopilotEvent {
  * Copilot events mapped to TranscriptEntry:
  * - user.message REDACTED {type: "user", ...}
  * - assistant.message REDACTED {type: "assistant", ...}
- * - assistant.turn_end REDACTED {type: "system", subtype: "turn_duration"}
- *   (maps to CC's turn_duration signal for completion detection)
+ * - assistant.turn_end REDACTED IGNORED (Copilot fires this between every sub-turn
+ *   within one user-message handling cycle, not at the end of the cycle).
+ *   Completion is detected via stop_reason "ask_user" (KSSP sessions always
+ *   end with ask_user) or the polling loop's idle fallback.
  * - session.start REDACTED extracted for sessionId
  */
 export function parseEvent(line: string): TranscriptEntry | null {
@@ -233,16 +235,6 @@ export function parseEvent(line: string): TranscriptEntry | null {
         return parseUserMessage(event, sessionId);
       case "assistant.message":
         return parseAssistantMessage(event, sessionId);
-      case "assistant.turn_end":
-        // Map to the "turn_duration" system entry that CC uses
-        // for reliable completion detection
-        return {
-          type: "system",
-          message: { content: [] },
-          sessionId,
-          subtype: "turn_duration",
-          timestamp: event.timestamp,
-        };
       case "session.error":
         return parseSessionError(event, sessionId);
       default:
@@ -357,12 +349,24 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
 
 /**
  * Extract assistant response from Copilot transcript entries.
- * Same logic as CC's extractAssistantResponse REDACTED scan from last user entry,
- * collect thinking/text, check for turn_duration completion signal.
+ *
+ * Completion: Copilot's `assistant.turn_end` fires per sub-turn (between
+ * every model interaction within one user-message handling cycle), not at
+ * the end of the cycle, so we cannot use it as a completion signal.
+ * Instead we rely on stop_reason "ask_user" which marks the end of a
+ * KSSP-protected turn (the agent always calls ask_user last). Sessions
+ * without KSSP fall back to the polling loop's idle detection.
+ *
+ * Text: a single user message often produces multiple assistant.message
+ * events (one per sub-turn), each carrying a fragment of prose alongside
+ * tool calls. Returning only the LAST entry's text loses everything that
+ * came before REDACTED e.g. the user sees only "modification 4" instead of the
+ * full "modification 1..2..3..4 + summary" report. We therefore always
+ * collect text from ALL assistant entries since the last user message.
  */
 export function extractAssistantResponse(
   entries: TranscriptEntry[],
-  opts?: { collectAllText?: boolean },
+  _opts?: { collectAllText?: boolean },
 ): AssistantResponse {
   // Find the last user entry
   let lastUserIdx = -1;
@@ -374,11 +378,6 @@ export function extractAssistantResponse(
   }
 
   const scanStart = lastUserIdx >= 0 ? lastUserIdx + 1 : 0;
-
-  // Check for turn_duration (our mapped turn_end)
-  const hasTurnDuration = entries
-    .slice(scanStart)
-    .some((e) => e.type === "system" && e.subtype === "turn_duration");
 
   const allThinkingParts: string[] = [];
   const allTextParts: string[] = [];
@@ -394,7 +393,7 @@ export function extractAssistantResponse(
       if (block.type === "thinking") {
         allThinkingParts.push(block.thinking);
       }
-      if (block.type === "text" && opts?.collectAllText) {
+      if (block.type === "text") {
         allTextParts.push(block.text);
       }
     }
@@ -405,21 +404,13 @@ export function extractAssistantResponse(
   }
 
   const lastEntry = entries[lastAssistantIdx];
-  const textParts: string[] = [];
-  if (opts?.collectAllText) {
-    textParts.push(...allTextParts);
-  } else {
-    for (const block of lastEntry.message.content) {
-      if (block.type === "text") {
-        textParts.push(block.text);
-      }
-    }
-  }
+  const textParts = allTextParts;
 
-  const hasExplicitCompletion =
+  // ask_user is treated as completion REDACTED the agent is waiting for user input.
+  // Other non-tool_use stop_reasons (end_turn, ...) also signal completion.
+  // assistant.turn_end events are NOT used (they fire per sub-turn).
+  const isComplete =
     lastEntry.stop_reason != null && lastEntry.stop_reason !== "tool_use";
-  // ask_user is treated as completion REDACTED the agent is waiting for user input
-  const isComplete = hasExplicitCompletion || hasTurnDuration;
 
   return {
     text: textParts.join("\n"),

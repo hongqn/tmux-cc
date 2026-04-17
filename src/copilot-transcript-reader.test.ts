@@ -102,16 +102,18 @@ describe("copilot-transcript-reader", () => {
       expect(entry!.stop_reason).toBe("tool_use");
     });
 
-    it("parses assistant.turn_end as system/turn_duration", () => {
+    it("ignores assistant.turn_end events", () => {
+      // Copilot fires turn_end between every sub-turn within one user
+      // message, not at the end of the cycle. Treating it as a completion
+      // signal caused responses to be returned mid-task, dropping later
+      // assistant text. Completion now relies on stop_reason "ask_user"
+      // (KSSP) or the polling loop's idle fallback.
       const event = JSON.stringify({
         type: "assistant.turn_end",
         data: { turnId: "0" },
         timestamp: "2026-04-10T00:01:00.000Z",
       });
-      const entry = parseEvent(event);
-      expect(entry).not.toBeNull();
-      expect(entry!.type).toBe("system");
-      expect(entry!.subtype).toBe("turn_duration");
+      expect(parseEvent(event)).toBeNull();
     });
 
     it("parses session.error (rate_limit) as a completed assistant entry with error text", () => {
@@ -261,22 +263,24 @@ describe("copilot-transcript-reader", () => {
   });
 
   describe("extractAssistantResponse", () => {
-    it("extracts text from last assistant entry", () => {
+    it("extracts text from a single assistant entry with explicit completion", () => {
       const entries: TranscriptEntry[] = [
         { type: "user", message: { content: [{ type: "text", text: "hi" }] }, sessionId: "s1" },
         {
           type: "assistant",
           message: { content: [{ type: "text", text: "Hello!" }] },
           sessionId: "s1",
+          // ask_user is the KSSP completion signal (parseAssistantMessage
+          // sets this when toolRequests contains an ask_user call).
+          stop_reason: "ask_user",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
       ];
       const result = extractAssistantResponse(entries);
       expect(result.text).toBe("Hello!");
       expect(result.isComplete).toBe(true);
     });
 
-    it("returns incomplete when no turn_end yet", () => {
+    it("returns incomplete when last assistant entry is mid-tool-chain", () => {
       const entries: TranscriptEntry[] = [
         { type: "user", message: { content: [{ type: "text", text: "hi" }] }, sessionId: "s1" },
         {
@@ -294,7 +298,11 @@ describe("copilot-transcript-reader", () => {
       expect(result.isComplete).toBe(false);
     });
 
-    it("takes text from last assistant entry only", () => {
+    it("collects text from ALL assistant entries since the last user message", () => {
+      // This is the bug behind the "REDACTED" report: a multi-turn task emits
+      // text fragments across several assistant.message events. Returning
+      // only the last entry's text dropped everything in between, so the
+      // user saw e.g. "modification 4" without "modification 1..3".
       const entries: TranscriptEntry[] = [
         { type: "user", message: { content: [{ type: "text", text: "hi" }] }, sessionId: "s1" },
         {
@@ -305,33 +313,20 @@ describe("copilot-transcript-reader", () => {
         },
         {
           type: "assistant",
+          message: { content: [{ type: "text", text: "Found it." }] },
+          sessionId: "s1",
+          stop_reason: "tool_use",
+        },
+        {
+          type: "assistant",
           message: { content: [{ type: "text", text: "The answer is 42." }] },
           sessionId: "s1",
+          stop_reason: "ask_user",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
       ];
       const result = extractAssistantResponse(entries);
-      expect(result.text).toBe("The answer is 42.");
+      expect(result.text).toBe("Let me check...\nFound it.\nThe answer is 42.");
       expect(result.isComplete).toBe(true);
-    });
-
-    it("collects all text with collectAllText option", () => {
-      const entries: TranscriptEntry[] = [
-        { type: "user", message: { content: [{ type: "text", text: "hi" }] }, sessionId: "s1" },
-        {
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Part 1" }] },
-          sessionId: "s1",
-        },
-        {
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Part 2" }] },
-          sessionId: "s1",
-        },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
-      ];
-      const result = extractAssistantResponse(entries, { collectAllText: true });
-      expect(result.text).toBe("Part 1\nPart 2");
     });
 
     it("returns empty text when no assistant entries after user", () => {
@@ -366,18 +361,12 @@ describe("copilot-transcript-reader", () => {
     });
 
     it("handles real Copilot multi-turn with tool use and continuation", () => {
-      // Simulates a real Copilot autopilot session:
-      // 1. User asks to list files
-      // 2. Assistant calls "view" tool (no text)
-      // 3. Turn ends, continuation turn starts
-      // 4. Assistant responds with text
-      // 5. Turn ends, continuation user message (empty)
-      // 6. Assistant calls task_complete
-      // 7. Final turn end
+      // Real Copilot autopilot flow ending in task_complete (no ask_user).
+      // The completion signal comes from the polling loop's idle detection,
+      // not from this function REDACTED here isComplete stays false because the
+      // last assistant entry has stop_reason "tool_use".
       const entries: TranscriptEntry[] = [
-        // User prompt
         { type: "user", message: { content: [{ type: "text", text: "list the files" }] }, sessionId: "s1" },
-        // Turn 1: tool call
         {
           type: "assistant",
           message: {
@@ -388,17 +377,13 @@ describe("copilot-transcript-reader", () => {
           sessionId: "s1",
           stop_reason: "tool_use",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
-        // Turn 2: text response (continuation)
         {
           type: "assistant",
           message: { content: [{ type: "text", text: "Here are the files:\n- file1\n- file2" }] },
           sessionId: "s1",
+          stop_reason: "tool_use",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
-        // Continuation user message (empty - autopilot)
         { type: "user", message: { content: [{ type: "text", text: "" }] }, sessionId: "s1" },
-        // Turn 3: task_complete
         {
           type: "assistant",
           message: {
@@ -409,34 +394,49 @@ describe("copilot-transcript-reader", () => {
           sessionId: "s1",
           stop_reason: "tool_use",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
       ];
 
-      // The last user entry is the empty continuation message
-      // Response after that is the task_complete tool call (no text)
       const result = extractAssistantResponse(entries);
-      // Text is empty since the last assistant message after the last user entry only has tool_use
+      // Last user entry is the empty continuation message; the only
+      // assistant entry after that is the task_complete tool_use, no text.
       expect(result.text).toBe("");
-      expect(result.isComplete).toBe(true);
+      expect(result.isComplete).toBe(false);
     });
 
-    it("handles Copilot multi-turn with collectAllText across continuation", () => {
+    it("aggregates text across all sub-turns when the chain ends in ask_user", () => {
+      // Real-world "REDACTED" shape: agent emits prose fragments across many
+      // assistant.message events while making edits, then closes the turn
+      // with ask_user. The full prose must be relayed (not just the last
+      // fragment).
       const entries: TranscriptEntry[] = [
-        { type: "user", message: { content: [{ type: "text", text: "list files" }] }, sessionId: "s1" },
+        { type: "user", message: { content: [{ type: "text", text: "do edits" }] }, sessionId: "s1" },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "Let me check..." }] },
+          message: { content: [{ type: "text", text: "**REDACTED1** done" }] },
           sessionId: "s1",
+          stop_reason: "tool_use",
         },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "Here are the files: a, b, c" }] },
+          message: { content: [{ type: "text", text: "**REDACTED2** done" }] },
           sessionId: "s1",
+          stop_reason: "tool_use",
         },
-        { type: "system", message: { content: [] }, sessionId: "s1", subtype: "turn_duration" },
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "**REDACTED3** done" }] },
+          sessionId: "s1",
+          stop_reason: "tool_use",
+        },
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "REDACTED\n\nMore?" }] },
+          sessionId: "s1",
+          stop_reason: "ask_user",
+        },
       ];
-      const result = extractAssistantResponse(entries, { collectAllText: true });
-      expect(result.text).toBe("Let me check...\nHere are the files: a, b, c");
+      const result = extractAssistantResponse(entries);
+      expect(result.text).toBe("**REDACTED1** done\n**REDACTED2** done\n**REDACTED3** done\nREDACTED\n\nMore?");
       expect(result.isComplete).toBe(true);
     });
   });
