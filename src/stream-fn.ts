@@ -164,9 +164,20 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       let adapter = primaryAdapter;
       let runConfig = config;
       try {
-        // Step 1: Derive a stable session key from the conversation
-        const sessionKey = deriveSessionKey(context.messages, sessionId);
-        console.log(`[tmux-cc] run: sessionKey=${sessionKey}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
+        // Step 1: Resolve agent identity and session key name early so
+        // we can derive a STABLE session key from the conversation name
+        // (e.g., "agent:main:main") instead of the gateway's session UUID.
+        // Using the UUID leads to duplicate tmux windows when the gateway
+        // re-issues a new UUID for the same logical conversation.
+        const agentAccountId = await resolveAgentId(sessionId);
+        const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
+
+        // Prefer the resolved key name for session key derivation so the
+        // same conversation always maps to the same tmux window. Fall
+        // back to the gateway UUID when name resolution fails (race on
+        // first cron invocation, etc.).
+        const sessionKey = deriveSessionKey(context.messages, sessionKeyName ?? sessionId);
+        console.log(`[tmux-cc] run: sessionKey=${sessionKey}, sessionKeyName=${sessionKeyName ?? "null"}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
 
         // Step 2: Extract new user message(s) from context
         const userText = extractNewUserMessages(context.messages);
@@ -185,14 +196,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // its own context files (CLAUDE.md, MEMORY.md) directly.
         const finalText = stripBootstrapWarnings(rawText);
 
-        // Step 4: Resolve agent account ID for MCP tools
-        const agentAccountId = await resolveAgentId(sessionId);
-
-        // Step 4.1: Resolve the openclaw session key name (e.g. "agent:myagent:main")
-        // for KPSS whitelist matching.
-        const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
-
-        // Step 4.2: Let the adapter reject or redirect sessions it shouldn't handle.
+        // Step 4: Let the adapter reject or redirect sessions it shouldn't handle.
         // E.g., tmux-copilot redirects cron/subagent sessions to the Claude Code
         // adapter, or rate-limited models to the fallback provider.
         if (adapter?.validateSession) {
