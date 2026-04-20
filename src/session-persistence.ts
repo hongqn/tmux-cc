@@ -22,6 +22,14 @@ interface PersistedSession {
 
 interface PersistedData {
   sessions: Record<string, PersistedSession>;
+  /**
+   * Mapping from an external conversation identifier (gateway sessionId or
+   * OpenClaw session key name like "agent:main:telegram:group:...") to the
+   * tmux-cc sessionKey (tmux- hash) originally derived for it. Lets msg 1
+   * (race, sessionKeyName not yet resolvable) and msg 2 (sessionKeyName
+   * resolvable, different hash) land on the same tmux window.
+   */
+  stableKeys?: Record<string, { sessionKey: string; lastActivityMs: number }>;
 }
 
 const PERSIST_DIR = join(homedir(), ".openclaw");
@@ -35,12 +43,15 @@ function loadRaw(): PersistedData {
     const raw = readFileSync(PERSIST_PATH, "utf-8");
     const data = JSON.parse(raw) as PersistedData;
     if (data && typeof data.sessions === "object") {
+      if (!data.stableKeys || typeof data.stableKeys !== "object") {
+        data.stableKeys = {};
+      }
       return data;
     }
   } catch {
     // File doesn't exist or is corrupt REDACTED start fresh
   }
-  return { sessions: {} };
+  return { sessions: {}, stableKeys: {} };
 }
 
 function save(data: PersistedData): void {
@@ -152,4 +163,58 @@ export function getPersistedClaudeSessionId(
 ): string | undefined {
   const data = loadRaw();
   return data.sessions[persistKey(sessionKey, adapterId)]?.claudeSessionId;
+}
+
+/**
+ * Look up a previously-derived sessionKey for a conversation identifier
+ * (gateway sessionId or OpenClaw session key name). Returns undefined when
+ * no mapping exists or the entry is older than MAX_AGE_MS (stale entries
+ * are pruned on next load).
+ */
+export function getStableSessionKey(identifier: string): string | undefined {
+  if (!identifier) return undefined;
+  const data = loadRaw();
+  const entry = data.stableKeys?.[identifier];
+  if (!entry) return undefined;
+  if (Date.now() - entry.lastActivityMs > MAX_AGE_MS) return undefined;
+  return entry.sessionKey;
+}
+
+/**
+ * Record a sessionKey under a conversation identifier so later invocations
+ * with the same identifier (or a sibling one REDACTED see the two-identifier
+ * persist in stream-fn.ts) recover the same tmux window.
+ */
+export function persistStableSessionKey(
+  identifier: string,
+  sessionKey: string,
+): void {
+  if (!identifier || !sessionKey) return;
+  const data = loadRaw();
+  if (!data.stableKeys) data.stableKeys = {};
+  const existing = data.stableKeys[identifier];
+  if (existing?.sessionKey === sessionKey) {
+    existing.lastActivityMs = Date.now();
+  } else {
+    data.stableKeys[identifier] = { sessionKey, lastActivityMs: Date.now() };
+  }
+  save(data);
+}
+
+/**
+ * Remove every stableKeys entry pointing at the given sessionKey. Used by
+ * the before_reset hook so /new wipes identifier REDACTED sessionKey mappings
+ * alongside the window and Claude session id.
+ */
+export function removeStableSessionKeysFor(sessionKey: string): void {
+  const data = loadRaw();
+  if (!data.stableKeys) return;
+  let changed = false;
+  for (const [id, entry] of Object.entries(data.stableKeys)) {
+    if (entry.sessionKey === sessionKey) {
+      delete data.stableKeys[id];
+      changed = true;
+    }
+  }
+  if (changed) save(data);
 }

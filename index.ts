@@ -13,7 +13,7 @@ import { ClaudeCodeAdapter } from "./src/adapters/claude-code.js";
 import { CopilotCliAdapter } from "./src/adapters/copilot-cli.js";
 import type { AgentAdapter } from "./src/adapters/types.js";
 import { deleteSession, startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
-import { removePersistedSession } from "./src/session-persistence.js";
+import { removePersistedSession, removeStableSessionKeysFor } from "./src/session-persistence.js";
 import { createTmuxClaudeStreamFn, deriveSessionKey } from "./src/stream-fn.js";
 import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
@@ -168,6 +168,7 @@ export default definePluginEntry({
       const tmuxKey = deriveSessionKey([], ctx.sessionKey);
       console.log(`[tmux-cc] before_reset: clearing window for sessionKeyName=${ctx.sessionKey}, tmuxKey=${tmuxKey}, reason=${event.reason ?? "unknown"}`);
       removePersistedSession(tmuxKey);
+      removeStableSessionKeysFor(tmuxKey);
       try {
         await deleteSession(tmuxKey, mergedConfig);
       } catch (err) {

@@ -1,6 +1,12 @@
 import type { Message, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { deriveSessionKey, extractNewUserMessages, extractSteeringText, stripBootstrapWarnings } from "./stream-fn.js";
+import {
+  deriveSessionKey,
+  extractNewUserMessages,
+  extractSteeringText,
+  extractUnstreamedFinalText,
+  stripBootstrapWarnings,
+} from "./stream-fn.js";
 
 describe("stream-fn", () => {
   describe("deriveSessionKey", () => {
@@ -386,6 +392,30 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
     it("returns null for object without content", () => {
       expect(extractSteeringText({ role: "user" })).toBeNull();
+    });
+  });
+
+  describe("extractUnstreamedFinalText", () => {
+    it("drops final text that was already emitted as a progressive text block", () => {
+      const productionSample = "REDACTEDïREDACTED\n\n**REDACTEDïREDACTED**\n- AREDACTEDïREDACTEDLinear REDACTEDïREDACTEDREDACTEDïREDACTED2REDACTED REDACTED REDACTEDREDACTED REDACTEDREDACTED REDACTED\n- BREDACTEDïREDACTEDREDACTED REDACTED REDACTED REDACTED 50% REDACTED\n- REDACTED";
+
+      expect(extractUnstreamedFinalText(productionSample, [productionSample])).toBe("");
+    });
+
+    it("returns only the suffix when progressive blocks are a prefix of final text", () => {
+      expect(extractUnstreamedFinalText("part 1\npart 2\nfinal", ["part 1", "part 2"])).toBe("final");
+    });
+
+    it("drops final text that matches the last progressive block after earlier commentary", () => {
+      expect(extractUnstreamedFinalText("final answer", ["checking files", "final answer"])).toBe("");
+    });
+
+    it("keeps final text when no progressive text was emitted", () => {
+      expect(extractUnstreamedFinalText("final only", [])).toBe("final only");
+    });
+
+    it("keeps final text when progressive text does not match the final response prefix", () => {
+      expect(extractUnstreamedFinalText("final answer", ["tool progress"])).toBe("final answer");
     });
   });
 });
