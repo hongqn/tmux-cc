@@ -67,7 +67,7 @@ describe("session-persistence", () => {
     expect(sessions.size).toBe(2);
   });
 
-  it("scopes persistence by adapter REDACTED Copilot and CC IDs don't cross", () => {
+  it("scopes persistence by adapter — Copilot and CC IDs don't cross", () => {
     // The bug this prevents: mid-stream rate-limit fallback was feeding
     // Copilot's session id to the CC adapter's --resume, killing the
     // process on startup because the id doesn't exist in ~/.claude/projects/.

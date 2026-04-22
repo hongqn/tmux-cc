@@ -217,13 +217,13 @@ interface CopilotEvent {
  * Parse a single Copilot event line into a TranscriptEntry.
  *
  * Copilot events mapped to TranscriptEntry:
- * - user.message REDACTED {type: "user", ...}
- * - assistant.message REDACTED {type: "assistant", ...}
- * - assistant.turn_end REDACTED IGNORED (Copilot fires this between every sub-turn
+ * - user.message → {type: "user", ...}
+ * - assistant.message → {type: "assistant", ...}
+ * - assistant.turn_end → IGNORED (Copilot fires this between every sub-turn
  *   within one user-message handling cycle, not at the end of the cycle).
  *   Completion is detected via stop_reason "ask_user" (KSSP sessions always
  *   end with ask_user) or the polling loop's idle fallback.
- * - session.start REDACTED extracted for sessionId
+ * - session.start → extracted for sessionId
  */
 export function parseEvent(line: string): TranscriptEntry | null {
   try {
@@ -265,7 +265,7 @@ function parseUserMessage(event: CopilotEvent, sessionId: string): TranscriptEnt
 /**
  * Synthesize a completed assistant entry from a session.error event. Without
  * this, Copilot CLI failures like rate limits show a message in the TUI but
- * never land as `assistant.message` events REDACTED the poller would hang on an
+ * never land as `assistant.message` events — the poller would hang on an
  * empty turn and `containsRateLimitError` (which looks at response.text)
  * would never trigger the adapter's recordRateLimit hook.
  *
@@ -277,7 +277,7 @@ function parseSessionError(event: CopilotEvent, sessionId: string): TranscriptEn
   const errorType = (event.data?.errorType as string) ?? "unknown";
   const message = (event.data?.message as string) ?? "Copilot CLI session error";
   // Prefix with errorType so containsRateLimitError patterns (rate.?limit,
-  // 429, overloaded, REDACTED) match for all the relevant classifications even
+  // 429, overloaded, …) match for all the relevant classifications even
   // when the message text is localized or phrased unusually.
   const text = `[${errorType}] ${message}`;
   return {
@@ -298,7 +298,7 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
     blocks.push({ type: "text", text: content });
   }
 
-  // Tool requests REDACTED tool_use blocks
+  // Tool requests → tool_use blocks
   const toolRequests = event.data?.toolRequests as Array<{
     toolCallId: string;
     name: string;
@@ -329,7 +329,7 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
       : undefined;
 
   // Append ask_user question as text so it appears in the response
-  // visible in Telegram. Without this, only the text content before ask_user shows.
+  // visible to the user. Without this, only the text content before ask_user shows.
   if (hasAskUser) {
     const askUserReq = toolRequests!.find((r) => r.name === "ask_user");
     const question = askUserReq?.arguments?.question as string | undefined;
@@ -360,7 +360,7 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
  * Text: a single user message often produces multiple assistant.message
  * events (one per sub-turn), each carrying a fragment of prose alongside
  * tool calls. Returning only the LAST entry's text loses everything that
- * came before REDACTED e.g. the user sees only "modification 4" instead of the
+ * came before — e.g. the user sees only "modification 4" instead of the
  * full "modification 1..2..3..4 + summary" report. We therefore always
  * collect text from ALL assistant entries since the last user message.
  */
@@ -406,7 +406,7 @@ export function extractAssistantResponse(
   const lastEntry = entries[lastAssistantIdx];
   const textParts = allTextParts;
 
-  // ask_user is treated as completion REDACTED the agent is waiting for user input.
+  // ask_user is treated as completion — the agent is waiting for user input.
   // Other non-tool_use stop_reasons (end_turn, ...) also signal completion.
   // assistant.turn_end events are NOT used (they fire per sub-turn).
   const isComplete =

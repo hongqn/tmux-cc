@@ -1,5 +1,5 @@
 /**
- * Copilot CLI adapter REDACTED implements AgentAdapter for GitHub Copilot CLI.
+ * Copilot CLI adapter — implements AgentAdapter for GitHub Copilot CLI.
  *
  * Wraps Copilot-specific logic: different CLI flags, transcript location/format,
  * MCP config path, and workspace setup. The tmux operations (sendKeys, capturePane)
@@ -56,11 +56,11 @@ const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
 
 /**
  * Substrings that identify a rendered ask_user selector. Copilot's TUI has
- * evolved across versions: older builds say "REDACTED to select", newer builds
- * say "REDACTED/REDACTED to navigate". We match either so upgrades don't silently break
+ * evolved across versions: older builds say "↑↓ to select", newer builds
+ * say "↑/↓ to navigate". We match either so upgrades don't silently break
  * ask_user routing.
  */
-const ASK_USER_SELECTOR_HINTS = ["REDACTED to select", "REDACTED/REDACTED to navigate"];
+const ASK_USER_SELECTOR_HINTS = ["↑↓ to select", "↑/↓ to navigate"];
 
 /** Whether a pane contains a rendered ask_user option list. */
 function hasAskUserSelector(pane: string): boolean {
@@ -238,16 +238,16 @@ const DEFAULT_COPILOT_MD = `# Copilot Project Instructions
 
 Read and follow the instructions in these files (in order):
 
-1. \`AGENTS.md\` REDACTED Workspace rules, behavior guidelines, and constraints
-2. \`SOUL.md\` REDACTED Character, personality, and communication style
-3. \`MEMORY.md\` REDACTED Conversation history, learned preferences, and context
+1. \`AGENTS.md\` — Workspace rules, behavior guidelines, and constraints
+2. \`SOUL.md\` — Character, personality, and communication style
+3. \`MEMORY.md\` — Conversation history, learned preferences, and context
 
 ---
 
 ## Messaging Protocol
 
 You are receiving messages from users through a messaging gateway.
-Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` REDACTED use these to identify who is speaking.
+Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` — use these to identify who is speaking.
 
 ### Silent Replies (NO_REPLY)
 
@@ -258,7 +258,7 @@ NO_REPLY
 \`\`\`
 
 Rules:
-- It must be your ENTIRE message REDACTED nothing else
+- It must be your ENTIRE message — nothing else
 - Never append it to an actual response
 - Never wrap it in markdown or code blocks
 
@@ -270,7 +270,7 @@ You may receive heartbeat poll messages. If you receive one and there is nothing
 HEARTBEAT_OK
 \`\`\`
 
-If something needs attention, do NOT include "HEARTBEAT_OK" REDACTED reply with the alert/update text instead.
+If something needs attention, do NOT include "HEARTBEAT_OK" — reply with the alert/update text instead.
 If \`HEARTBEAT.md\` exists, read it and follow its instructions during heartbeats.
 `;
 
@@ -288,7 +288,7 @@ export class CopilotCliAdapter implements AgentAdapter {
   private readonly kpssNonWhitelistBehavior: "no-kpss" | "reject" | { fallback: string };
   private readonly rateLimitFallbackModels: Record<string, string>;
 
-  /** Per-model rate limit cooldown: modelId REDACTED expiry timestamp (ms). */
+  /** Per-model rate limit cooldown: modelId → expiry timestamp (ms). */
   private readonly modelRateLimits = new Map<string, number>();
 
   constructor(opts: CopilotCliAdapterOptions = {}) {
@@ -300,7 +300,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     this.rateLimitFallbackModels = opts.rateLimitFallbackModels ?? {};
   }
 
-  // REDACTED Lifecycle REDACTED
+  // ─── Lifecycle ─────────────────────────────────────────────
 
   async createAgentWindow(params: {
     tmuxSession: string;
@@ -375,12 +375,12 @@ export class CopilotCliAdapter implements AgentAdapter {
     }
     if (Date.now() >= deadline) return false;
 
-    // Phase 2: TUI prompt ready (REDACTED character)
+    // Phase 2: TUI prompt ready (❯ character)
     while (Date.now() < deadline) {
       try {
         const content = await capturePane(tmuxSession, windowName);
 
-        // Auto-dismiss workspace trust prompt REDACTED select "remember" option
+        // Auto-dismiss workspace trust prompt — select "remember" option
         if (content.includes("Do you trust the files")) {
           const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
           // Select option 2: "Yes, and remember this folder"
@@ -419,7 +419,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     try {
       const content = await capturePane(tmuxSession, windowName);
       // Interactive ask_user prompts show "Esc to cancel" alongside selection UI.
-      // These are NOT processing REDACTED the agent is waiting for user input.
+      // These are NOT processing — the agent is waiting for user input.
       if (hasAskUserSelector(content) || content.includes("Enter to confirm")) {
         return false;
       }
@@ -469,7 +469,7 @@ export class CopilotCliAdapter implements AgentAdapter {
         await sleep(300);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       }
-      // Pasted text not submitted REDACTED Copilot uses "[Paste #N - M lines]",
+      // Pasted text not submitted — Copilot uses "[Paste #N - M lines]",
       // Claude Code uses "[Pasted text #N]"
       else if (content.includes("[Pasted text #") || content.includes("[Paste #")) {
         console.log(`[copilot-cli] pasted text not submitted, sending Enter`);
@@ -480,7 +480,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     }
   }
 
-  // REDACTED Message Sending REDACTED
+  // ─── Message Sending ────────────────────────────────────────
 
   /**
    * Reject or redirect sessions that don't match the KPSS whitelist,
@@ -493,7 +493,7 @@ export class CopilotCliAdapter implements AgentAdapter {
    * to a fallback adapter instead of being handled by this adapter.
    */
   validateSession(sessionKeyName?: string, modelId?: string): { fallback: string } | void {
-    // Check rate limit cooldown first REDACTED applies regardless of KPSS whitelist.
+    // Check rate limit cooldown first — applies regardless of KPSS whitelist.
     if (modelId) {
       const expiresAt = this.modelRateLimits.get(modelId);
       if (expiresAt) {
@@ -505,7 +505,7 @@ export class CopilotCliAdapter implements AgentAdapter {
             return { fallback };
           }
         } else {
-          // Cooldown expired REDACTED clear and retry
+          // Cooldown expired — clear and retry
           this.modelRateLimits.delete(modelId);
           console.log(`[copilot-cli] rate limit cooldown expired for model=${modelId}, retrying`);
         }
@@ -520,7 +520,7 @@ export class CopilotCliAdapter implements AgentAdapter {
 
     if (this.kpssNonWhitelistBehavior === "reject") {
       throw new Error(
-        `[copilot-cli] session "${sessionKeyName}" rejected REDACTED does not match conversation whitelist`,
+        `[copilot-cli] session "${sessionKeyName}" rejected — does not match conversation whitelist`,
       );
     }
     // "no-kpss": proceed without KPSS
@@ -557,13 +557,13 @@ export class CopilotCliAdapter implements AgentAdapter {
     const kpssEnabled = this.isKpssEnabled(sessionKey);
     const messageText = kpssEnabled ? text + KSSP_SUFFIX : text;
 
-    // Check if agent is at an ask_user prompt REDACTED route user's message through it.
+    // Check if agent is at an ask_user prompt — route user's message through it.
     // Capture extra lines (50) to ensure the selection box is visible.
     let pane = await capturePane(tmuxSession, windowName, 50);
     if (pane && this.isAskUserPrompt(pane)) {
-      // When "REDACTED Asking user" appears but the selection box hasn't rendered yet,
+      // When "○ Asking user" appears but the selection box hasn't rendered yet,
       // wait up to 5s for it to appear before falling back to freeform.
-      if (pane.includes("REDACTED Asking user") && !hasAskUserSelector(pane)) {
+      if (pane.includes("○ Asking user") && !hasAskUserSelector(pane)) {
         for (let waitMs = 0; waitMs < 5000; waitMs += 500) {
           await sleep(500);
           pane = await capturePane(tmuxSession, windowName, 50) || '';
@@ -572,7 +572,7 @@ export class CopilotCliAdapter implements AgentAdapter {
       }
 
       if (hasAskUserSelector(pane)) {
-        // Options variant REDACTED navigate to "Other (type your answer)" and type answer
+        // Options variant — navigate to "Other (type your answer)" and type answer
         const optionCount = this.countAskUserOptions(pane);
         console.log(`[copilot-cli] ask_user prompt with ${optionCount} options, routing text to Other`);
 
@@ -589,7 +589,7 @@ export class CopilotCliAdapter implements AgentAdapter {
         await sendKeys(tmuxSession, windowName, messageText);
         return;
       } else {
-        // Freeform variant REDACTED type the answer directly
+        // Freeform variant — type the answer directly
         console.log(`[copilot-cli] ask_user freeform prompt, typing answer directly`);
         await sendKeys(tmuxSession, windowName, messageText);
         return;
@@ -601,22 +601,22 @@ export class CopilotCliAdapter implements AgentAdapter {
 
   /**
    * Count the number of options in an ask_user prompt.
-   * Options look like: "REDACTED 1. Label" or "  2. Label" etc.
-   * Lines may be inside a box border (REDACTED prefix).
+   * Options look like: "❯ 1. Label" or "  2. Label" etc.
+   * Lines may be inside a box border (│ prefix).
    *
-   * The freeform-input fallback label is "Other (typeREDACTED)" in older Copilot
-   * builds and "Type something" in newer ones REDACTED both are counted.
+   * The freeform-input fallback label is "Other (type…)" in older Copilot
+   * builds and "Type something" in newer ones — both are counted.
    */
   private countAskUserOptions(paneContent: string): number {
     const lines = paneContent.split("\n");
     let count = 0;
     for (const line of lines) {
       // Strip box border characters before matching
-      const stripped = line.replace(/^[REDACTED|]+\s*/, '');
+      const stripped = line.replace(/^[│┃|]+\s*/, '');
       if (
-        /^[REDACTED>]?\s*\d+\.\s/.test(stripped) ||
-        /^[REDACTED>]?\s*Other[\s(]/.test(stripped) ||
-        /^[REDACTED>]?\s*Type something/.test(stripped)
+        /^[❯>]?\s*\d+\.\s/.test(stripped) ||
+        /^[❯>]?\s*Other[\s(]/.test(stripped) ||
+        /^[❯>]?\s*Type something/.test(stripped)
       ) {
         count++;
       }
@@ -626,15 +626,15 @@ export class CopilotCliAdapter implements AgentAdapter {
 
   /**
    * Detect if the pane shows an ask_user prompt (options or freeform).
-   * The bordered box with a selector hint or "REDACTED Asking user" is reliable.
+   * The bordered box with a selector hint or "○ Asking user" is reliable.
    */
   private isAskUserPrompt(paneContent: string): boolean {
     // Options variant: bordered box with selector (old or new TUI strings)
     if (hasAskUserSelector(paneContent) && paneContent.includes("Esc to cancel")) {
       return true;
     }
-    // Freeform variant or generic: "REDACTED Asking user" indicator
-    if (paneContent.includes("REDACTED Asking user")) {
+    // Freeform variant or generic: "○ Asking user" indicator
+    if (paneContent.includes("○ Asking user")) {
       return true;
     }
     return false;
@@ -647,7 +647,7 @@ export class CopilotCliAdapter implements AgentAdapter {
    */
   private isKpssEnabled(sessionKey?: string): boolean {
     if (this.kpssSessionWhitelist.length === 0) return true;
-    if (!sessionKey) return true; // no session key REDACTED default to enabled
+    if (!sessionKey) return true; // no session key → default to enabled
     return this.kpssSessionWhitelist.some(pattern =>
       this.matchSessionKeyPattern(sessionKey, pattern),
     );
@@ -677,7 +677,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     }
   }
 
-  // REDACTED Transcript REDACTED
+  // ─── Transcript ────────────────────────────────────────────
 
   getExistingTranscriptPaths(cwd: string): Map<string, number> {
     return cpGetExistingPaths(cwd);
@@ -717,7 +717,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     return cpExtractResponse(entries, opts);
   }
 
-  // REDACTED Workspace REDACTED
+  // ─── Workspace ─────────────────────────────────────────────
 
   setupWorkspace(cwd: string): void {
     this.writeMcpConfig();
@@ -731,7 +731,7 @@ export class CopilotCliAdapter implements AgentAdapter {
     return match?.agentModelId ?? bare;
   }
 
-  // REDACTED Private helpers REDACTED
+  // ─── Private helpers ───────────────────────────────────────
 
   private writeMcpConfig(): void {
     // Copilot CLI reads MCP servers from ~/.copilot/mcp-config.json

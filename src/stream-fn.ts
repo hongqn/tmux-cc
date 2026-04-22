@@ -57,7 +57,7 @@ export interface StreamFnOptions {
   adapter?: AgentAdapter;
   /** Fallback adapter used when the primary adapter's validateSession returns a fallback. */
   fallbackAdapter?: AgentAdapter;
-  /** Provider ID (e.g., "tmux-cc", "tmux-copilot") REDACTED used in response metadata. */
+  /** Provider ID (e.g., "tmux-cc", "tmux-copilot") — used in response metadata. */
   providerId?: string;
 }
 
@@ -115,10 +115,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
   return (_model: unknown, context: Context, options?: Record<string, unknown>) => {
     const stream = createAssistantMessageEventStream();
-    // Cancellation signal REDACTED set when the consumer calls return() or abort signal fires (e.g., /stop)
+    // Cancellation signal — set when the consumer calls return() or abort signal fires (e.g., /stop)
     let cancelled = false;
     let cancelSession: SessionState | null = null;
-    // Set when the stream has completed normally REDACTED prevents return() from sending Escape
+    // Set when the stream has completed normally — prevents return() from sending Escape
     let streamDone = false;
     // Guard against sending Escape multiple times (abort handler + poll + return())
     let escSent = false;
@@ -126,7 +126,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     const signal = options?.signal as AbortSignal | undefined;
     const sessionId = options?.sessionId as string | undefined;
 
-    // Extract getSteeringMessages from options REDACTED pi-agent-core spreads its
+    // Extract getSteeringMessages from options — pi-agent-core spreads its
     // config into the third argument of streamFn, so this is available at
     // runtime even though it's not in the declared type.
     const getSteeringMessages = options?.getSteeringMessages as
@@ -156,7 +156,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         cancelled = true;
       } else {
         signal.addEventListener("abort", () => {
-          console.log(`[tmux-cc] abort signal received REDACTED cancelling stream`);
+          console.log(`[tmux-cc] abort signal received — cancelling stream`);
           cancelled = true;
           interruptCC("abort signal");
         }, { once: true });
@@ -171,7 +171,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
       try {
         // Step 1: Resolve the openclaw session key name (e.g. "agent:main:main")
         // BEFORE deriving the tmux session key, so the same logical conversation
-        // always maps to the same tmux window REDACTED even when the gateway issues a
+        // always maps to the same tmux window — even when the gateway issues a
         // new session UUID (eviction). User-initiated /new and /reset are
         // handled separately by the before_reset hook (see index.ts), which
         // explicitly tears down the window when intentional refresh is needed.
@@ -179,7 +179,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
 
         // Recover a previously-used sessionKey so msg 1 (sessionKeyName race
-        // REDACTED sessions.json not yet written) and msg 2 (sessionKeyName now
+        // — sessions.json not yet written) and msg 2 (sessionKeyName now
         // resolvable, different hash) share a tmux window. Try sessionKeyName
         // first (covers gateway eviction where sessionId changes but the key
         // name stays the same), then sessionId (covers the first-message
@@ -199,8 +199,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         // Persist the mapping under every identifier available so a later
-        // call REDACTED even one racing through the resolveSessionKeyName gap, or
-        // arriving post-eviction with a fresh sessionId REDACTED recovers the same
+        // call — even one racing through the resolveSessionKeyName gap, or
+        // arriving post-eviction with a fresh sessionId — recovers the same
         // sessionKey.
         if (sessionId) persistStableSessionKey(sessionId, sessionKey);
         if (sessionKeyName) persistStableSessionKey(sessionKeyName, sessionKey);
@@ -220,7 +220,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const processedText = processMediaContent(context.messages, config.workingDirectory);
         const rawText = processedText || userText;
 
-        // Step 3.5: Strip OpenClaw bootstrap warnings REDACTED Claude Code manages
+        // Step 3.5: Strip OpenClaw bootstrap warnings — Claude Code manages
         // its own context files (CLAUDE.md, MEMORY.md) directly.
         const finalText = stripBootstrapWarnings(rawText);
 
@@ -255,7 +255,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
         if (!aliveCheck) {
           console.error(`[tmux-cc] process not alive in window=${session.windowName}`);
-          emitTextResponse(stream, "REDACTED�REDACTED Agent process failed to start. Please retry.");
+          emitTextResponse(stream, "⚠️ Agent process failed to start. Please retry.");
           return;
         }
 
@@ -302,7 +302,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         } catch (e) {
           // Window may have been killed between isProcessAlive check and sendKeys
           console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
-          emitTextResponse(stream, "REDACTED�REDACTED Claude Code session is unavailable. Please retry.");
+          emitTextResponse(stream, "⚠️ Claude Code session is unavailable. Please retry.");
           await killWindow(config.tmuxSession, session.windowName);
           return;
         }
@@ -331,16 +331,16 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         stream.push({ type: "start", partial: makePartial() });
         streamStarted = true;
 
-        // Streaming state REDACTED tracked across polls to emit incremental events.
+        // Streaming state — tracked across polls to emit incremental events.
         // Each transcript entry becomes its own text content block. Emitting as
-        // text (not thinking) is what makes progress reach Telegram block
+        // text (not thinking) is what makes progress reach messaging channel block
         // replies: OpenClaw's pi-embedded-subscribe early-returns on thinking_*
         // events unless reasoningLevel is "stream", so thinking_* never hits
         // the block-reply pipeline. text_* events do, and text_end triggers
-        // flushBlockReplyBuffer REDACTED onBlockReply per entry.
+        // flushBlockReplyBuffer → onBlockReply per entry.
         //
         // Requires blockStreamingBreak: "text_end" (default) and
-        // blockStreamingCoalesce.idleMs >= 1 on the Telegram channel config;
+        // blockStreamingCoalesce.idleMs >= 1 on the messaging channel config;
         // idleMs: 0 disables the idle timer entirely and batches everything
         // to turn end.
         let lastProcessedEntryIdx = 0;
@@ -367,8 +367,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
             // Only stream natural-language reasoning: real thinking content
             // (usually empty for CC login auth) and CC's prose commentary
-            // between tool calls. Skip tool_use blocks REDACTED users don't want
-            // "�REDACTED Bash: ..." noise in Telegram, just the thinking.
+            // between tool calls. Skip tool_use blocks — users don't want
+            // "🔧 Bash: ..." noise in messaging channels, just the thinking.
             const parts: string[] = [];
             for (const block of entry.message.content) {
               if (block.type === "thinking" && block.thinking) {
@@ -387,7 +387,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           // keep the gateway stream alive during long CC thinking phases with
           // no transcript writes. Empty thinking_delta is dropped by OpenClaw
           // (emitReasoningStream early-returns on empty text), so this is
-          // invisible to Telegram.
+          // invisible to messaging channels.
           const now = Date.now();
           if (now - lastStreamEventMs >= HEARTBEAT_INTERVAL_MS) {
             const beat: ThinkingContent = { type: "thinking", thinking: "" };
@@ -462,11 +462,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
           if (!aliveAfterRestart) {
             console.error(`[tmux-cc] restart failed, agent still not alive`);
-            closeStreamWithError("REDACTED�REDACTED Agent process crashed and could not be restarted. Please retry.");
+            closeStreamWithError("⚠️ Agent process crashed and could not be restarted. Please retry.");
             return;
           }
 
-          // After restart, transcriptPath is reset REDACTED re-record offset
+          // After restart, transcriptPath is reset — re-record offset
           offsetBeforeSend = 0;
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
@@ -483,15 +483,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         if (!response) {
-          // If cancelled (e.g. /stop), end stream silently REDACTED the gateway
+          // If cancelled (e.g. /stop), end stream silently — the gateway
           // already knows the run was aborted, so emitting an error response
           // would result in a stale/duplicate message to the user.
           if (cancelled) {
             console.log(`[tmux-cc] run aborted (/stop), ending stream with stop confirmation`);
-            // Emit explicit "�REDACTED Stopped." text so the gateway has visible
+            // Emit explicit "🛑 Stopped." text so the gateway has visible
             // content to render.  A thinking-only (no-text) response may
             // trigger fallback error messages in some gateway versions.
-            const stopText = "�REDACTED Stopped.";
+            const stopText = "🛑 Stopped.";
             const textBlock: TextContent = { type: "text", text: stopText };
             partialContent.push(textBlock);
             const textIdx = partialContent.length - 1;
@@ -507,11 +507,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
           if (!ccAlive) {
             console.error(`[tmux-cc] agent crashed, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            closeStreamWithError("REDACTED�REDACTED Agent process crashed. Please retry.");
+            closeStreamWithError("⚠️ Agent process crashed. Please retry.");
             await killWindow(config.tmuxSession, session.windowName);
           } else {
             console.error(`[tmux-cc] TIMEOUT after ${config.responseTimeoutMs}ms, transcriptPath=${session.transcriptPath ?? "null"}, offset=${session.transcriptOffset}`);
-            closeStreamWithError("REDACTED�REDACTED Agent response timed out. Please retry.");
+            closeStreamWithError("⚠️ Agent response timed out. Please retry.");
           }
           return;
         }
@@ -548,7 +548,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                 sessionKeyName ?? sessionId,
                 () => cancelled,
               );
-              // Re-poll against the fresh session. Start from offset 0 REDACTED
+              // Re-poll against the fresh session. Start from offset 0 —
               // updateTranscriptPath will re-discover via the snapshot.
               const retryResponse = await pollForResponse(session, fallbackOffset, runConfig, adapter, onNewEntries, () => cancelled, checkSteering);
               if (retryResponse?.text) {
@@ -602,7 +602,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           reason: "stop",
           message: makePartial(),
         });
-        console.log(`[tmux-cc] pushed: done REDACTED all stream events emitted`);
+        console.log(`[tmux-cc] pushed: done — all stream events emitted`);
         streamDone = true;
 
         // Track turns and schedule eager cleanup for one-shot sessions
@@ -618,7 +618,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const message = err instanceof Error ? err.message : "Unknown error in tmux-cc";
         console.error(`[tmux-cc] run() error:`, err);
         if (streamStarted) {
-          closeStreamWithError(`REDACTED�REDACTED ${message}`);
+          closeStreamWithError(`⚠️ ${message}`);
         } else {
           emitError(stream, message);
         }
@@ -634,7 +634,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
     // Diagnostic: wrap [Symbol.asyncIterator] to log event consumption
     const origIter = stream[Symbol.asyncIterator].bind(stream);
     (stream as any)[Symbol.asyncIterator] = function () {
-      console.log(`[tmux-cc] DIAG: [Symbol.asyncIterator]() called REDACTED iterator created`);
+      console.log(`[tmux-cc] DIAG: [Symbol.asyncIterator]() called — iterator created`);
       const it = origIter();
       let callCount = 0;
       return {
@@ -652,9 +652,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           }
         },
         async return(v?: unknown) {
-          console.log(`[tmux-cc] DIAG: return() called REDACTED streamDone=${streamDone}`);
+          console.log(`[tmux-cc] DIAG: return() called — streamDone=${streamDone}`);
           if (streamDone) {
-            // Normal iterator cleanup after stream completed REDACTED don't interrupt CC
+            // Normal iterator cleanup after stream completed — don't interrupt CC
             return it.return?.(v) ?? { done: true as const, value: undefined };
           }
           cancelled = true;
@@ -1074,11 +1074,11 @@ async function pollForResponse(
   let lastLogTime = 0;
   const allEntries: TranscriptEntry[] = [];
   // Track last time we saw real activity (transcript entries, active processing,
-  // or pane content changes REDACTED the latter covers long Claude thinking turns
+  // or pane content changes — the latter covers long Claude thinking turns
   // where the CLI's status-line timer ticks but no transcript entry is written
   // and isClaudeProcessing occasionally misses the "esc to int" marker).
   let lastActiveTime = Date.now();
-  // Hash of the last captured pane content REDACTED used to detect visual activity
+  // Hash of the last captured pane content — used to detect visual activity
   // (spinner/timer ticks, streaming output) when isProcessing is flaky.
   let lastPaneHash: string | null = null;
 
@@ -1091,7 +1091,7 @@ async function pollForResponse(
     // Check cancellation (e.g. /stop command)
     if (isCancelled?.()) {
       console.log(`[tmux-cc] poll #${pollCount}: cancelled by consumer`);
-      // Don't send Escape here REDACTED interruptCC() handles it exactly once
+      // Don't send Escape here — interruptCC() handles it exactly once
       return null;
     }
 
@@ -1190,7 +1190,7 @@ async function pollForResponse(
     session.transcriptOffset = currentOffset;
 
     if (result.entries.length > 0) {
-      // Activity detected REDACTED extend the deadline and reset idle timer
+      // Activity detected — extend the deadline and reset idle timer
       deadline = Date.now() + config.responseTimeoutMs;
       lastActiveTime = Date.now();
       session.lastActivityMs = Date.now();
@@ -1227,7 +1227,7 @@ async function pollForResponse(
         return response;
       }
 
-      // Fallback: agent wrote stop_reason: null REDACTED check if idle
+      // Fallback: agent wrote stop_reason: null — check if idle
       if (!response.isComplete && response.text) {
         const stillProcessing = adapter
           ? await adapter.isProcessing(config.tmuxSession, session.windowName)
@@ -1239,7 +1239,7 @@ async function pollForResponse(
         }
       }
     } else {
-      // No new entries REDACTED check if agent finished with stop_reason: null
+      // No new entries — check if agent finished with stop_reason: null
       if (allEntries.length > 0) {
         const pendingResponse = adapter
           ? adapter.extractAssistantResponse(allEntries)
@@ -1256,7 +1256,7 @@ async function pollForResponse(
         }
       }
 
-      // Agent may be stuck at a blocking prompt REDACTED can happen either at the
+      // Agent may be stuck at a blocking prompt — can happen either at the
       // start of a turn (no entries yet) or mid-turn (e.g., an Edit tool call
       // that triggers a permission dialog because the target path is outside
       // the bypass scope). Run the handler unconditionally so mid-turn
@@ -1294,7 +1294,7 @@ async function pollForResponse(
         ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
         : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
 
-      // Agent is alive but producing no new transcript entries REDACTED it may be
+      // Agent is alive but producing no new transcript entries — it may be
       // running a long tool (e.g., a 10-minute build) or waiting for an API
       // response with no child process visible.
       if (processAlive) {
@@ -1302,7 +1302,7 @@ async function pollForResponse(
           ? await adapter.isProcessing(config.tmuxSession, session.windowName)
           : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
         if (stillProcessing) {
-          // Extend deadline and reset idle timer REDACTED the agent is actively running a tool
+          // Extend deadline and reset idle timer — the agent is actively running a tool
           deadline = Date.now() + config.responseTimeoutMs;
           lastActiveTime = Date.now();
         } else {
@@ -1323,7 +1323,7 @@ async function pollForResponse(
               lastPaneHash = hash;
             }
           } catch {
-            // Ignore capture-pane errors REDACTED we'll fall through to the
+            // Ignore capture-pane errors — we'll fall through to the
             // existing alive-but-idle handling.
           }
 
@@ -1429,12 +1429,12 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
     if (knownPath) {
       const snapshotSize = session.existingTranscriptPaths?.get(knownPath);
       if (snapshotSize != null) {
-        // Known file that existed before REDACTED use snapshot offset to skip old entries
+        // Known file that existed before — use snapshot offset to skip old entries
         console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, growing) found: ${knownPath}, snapshotSize=${snapshotSize}`);
         session.transcriptPath = knownPath;
         session.transcriptOffset = snapshotSize;
       } else {
-        // File is brand new (not in snapshot) REDACTED read from start
+        // File is brand new (not in snapshot) — read from start
         console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, new) found: ${knownPath}`);
         session.transcriptPath = knownPath;
         session.transcriptOffset = 0;
@@ -1442,7 +1442,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
       session.existingTranscriptPaths = undefined;
       return;
     }
-    // Session file doesn't exist yet REDACTED fall through to generic strategies
+    // Session file doesn't exist yet — fall through to generic strategies
   }
 
   if (session.existingTranscriptPaths) {
@@ -1486,7 +1486,7 @@ function updateTranscriptPath(session: SessionState, workingDirectory: string, a
       return;
     }
 
-    // Neither found yet REDACTED keep waiting for agent to start writing
+    // Neither found yet — keep waiting for agent to start writing
     return;
   }
 
@@ -1550,7 +1550,7 @@ function emitTextResponse(
   message: string,
 ): void {
   const response: AssistantResponse = {
-    text: `REDACTED�REDACTED ${message}`,
+    text: `⚠️ ${message}`,
     isComplete: true,
   };
   const assistantMessage = buildAssistantMessage(response);

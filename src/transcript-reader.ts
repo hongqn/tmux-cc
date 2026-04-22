@@ -22,7 +22,7 @@ import type {
  * for its project directory name.
  *
  * Claude Code replaces both "/" and "." with "-" in the path.
- * Example: "/home/user/.openclaw/workspace" REDACTED "-home-user--openclaw-workspace"
+ * Example: "/home/user/.openclaw/workspace" → "-home-user--openclaw-workspace"
  */
 export function encodeWorkingDirectory(cwd: string): string {
   return cwd.replace(/[/.]/g, "-");
@@ -61,7 +61,7 @@ export function findLatestTranscript(cwd: string): string | null {
 /**
  * Get paths and sizes of all existing JSONL transcript files.
  * Used to snapshot files before creating a new Claude Code session.
- * Maps file path REDACTED file size in bytes.
+ * Maps file path → file size in bytes.
  */
 export function getExistingTranscriptPaths(cwd: string): Map<string, number> {
   const projectDir = getProjectDir(cwd);
@@ -227,7 +227,7 @@ function extractAskUserQuestionText(input: Record<string, unknown>): string | nu
  * Claude Code transcript format:
  * - User entries:      {type: "user", message: {role: "user", content: "..."}}
  * - Assistant entries:  {message: {role: "assistant", content: [...], stop_reason: "end_turn"}}
- *   (no top-level "type" field REDACTED inferred from message.role)
+ *   (no top-level "type" field — inferred from message.role)
  * - Summary entries:    {type: "summary", ...}
  * - System/other:       {type: "system"|"file-history-snapshot"|"last-prompt", ...}
  */
@@ -265,7 +265,7 @@ export function parseLine(line: string): TranscriptEntry | null {
     // stop_reason handling: Claude Code writes stop_reason values:
     // - "end_turn": explicit completion
     // - "tool_use": model is mid-chain, more tool calls coming
-    // - null: ambiguous REDACTED can be intermediate OR final; do NOT map to "end_turn"
+    // - null: ambiguous — can be intermediate OR final; do NOT map to "end_turn"
     //   (turn_duration system entry is the reliable completion signal)
     let stopReason: string | undefined;
     if (msg.stop_reason != null) {
@@ -273,7 +273,7 @@ export function parseLine(line: string): TranscriptEntry | null {
     } else if (parsed.stop_reason != null) {
       stopReason = String(parsed.stop_reason);
     }
-    // Note: stop_reason: null is left as undefined REDACTED ambiguous without turn_duration
+    // Note: stop_reason: null is left as undefined — ambiguous without turn_duration
 
     const normalizedContent: TranscriptContentBlock[] =
       typeof content === "string" ? [{ type: "text", text: content }] : (content ?? []);
@@ -323,8 +323,8 @@ export function parseLine(line: string): TranscriptEntry | null {
  * Extracts only "text" blocks (not thinking, tool_use, or tool_result).
  *
  * Completion detection uses two signals:
- * 1. Explicit stop_reason: "end_turn" or "max_tokens" REDACTED complete
- * 2. turn_duration system entry REDACTED the entire turn is finished
+ * 1. Explicit stop_reason: "end_turn" or "max_tokens" → complete
+ * 2. turn_duration system entry → the entire turn is finished
  *
  * stop_reason: null is ambiguous (can be intermediate or final) so
  * we rely on the turn_duration system entry to confirm completion
@@ -353,7 +353,7 @@ export function extractAssistantResponse(
   const scanStart = lastUserIdx >= 0 ? lastUserIdx + 1 : 0;
 
   // Check if a turn_duration system entry is present AFTER the last user
-  // entry REDACTED this is the reliable signal that the current turn is finished.
+  // entry — this is the reliable signal that the current turn is finished.
   const hasTurnDuration = entries
     .slice(scanStart)
     .some((e) => e.type === "system" && e.subtype === "turn_duration");
@@ -389,7 +389,7 @@ export function extractAssistantResponse(
 
   const lastEntry = entries[lastAssistantIdx];
   // When the turn ends with an AskUserQuestion tool call, CC splits the
-  // assistant's prose and the tool_use into separate entries REDACTED the last
+  // assistant's prose and the tool_use into separate entries — the last
   // entry (with the tool_use + injected question text) has no earlier
   // prose. Fall back to all-text so the user sees the actual answer,
   // not just the question.
@@ -406,7 +406,7 @@ export function extractAssistantResponse(
   }
 
   // "tool_use" stop_reason means the model is still working (more tool
-  // calls to come) REDACTED don't treat as a complete response.
+  // calls to come) — don't treat as a complete response.
   const hasExplicitCompletion =
     lastEntry.stop_reason != null && lastEntry.stop_reason !== "tool_use";
   const isComplete = hasExplicitCompletion || hasTurnDuration;

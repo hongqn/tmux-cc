@@ -58,12 +58,12 @@ export interface SessionState {
   turnCount: number;
   /**
    * Snapshot of existing transcript files taken before creating the tmux window.
-   * Maps file path REDACTED file size at snapshot time.
+   * Maps file path → file size at snapshot time.
    * Used by pollForResponse to identify NEW files or detect when Claude Code
    * appends to an existing file (size increase).
    */
   existingTranscriptPaths?: Map<string, number>;
-  /** OpenClaw agent account ID (e.g., "myagent") REDACTED used to set env var for MCP server. */
+  /** OpenClaw agent account ID (e.g., "myagent") — used to set env var for MCP server. */
   agentAccountId?: string;
   /** Reference to the adapter that manages this session (for cleanup checks). */
   adapter?: import("./adapters/types.js").AgentAdapter;

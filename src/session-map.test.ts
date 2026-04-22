@@ -100,7 +100,7 @@ describe("session-map", () => {
       expect(cleaned).toBe(2);
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-claude", "cc-old1");
       expect(tmuxManager.killWindow).toHaveBeenCalledWith("openclaw-claude", "cc-old2");
-      // Only bash left REDACTED kill the entire session
+      // Only bash left → kill the entire session
       expect(tmuxManager.killSession).toHaveBeenCalledWith("openclaw-claude");
     });
 

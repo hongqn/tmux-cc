@@ -117,7 +117,7 @@ describe("copilot-transcript-reader", () => {
     });
 
     it("parses session.error (rate_limit) as a completed assistant entry with error text", () => {
-      // Real Copilot rate-limit events from events.jsonl REDACTED the agent
+      // Real Copilot rate-limit events from events.jsonl — the agent
       // never writes assistant.message, only turn_start/turn_end +
       // session.error. Without this mapping the poller would hang
       // on an empty turn and the rate-limit cooldown would never fire.
@@ -363,7 +363,7 @@ describe("copilot-transcript-reader", () => {
     it("handles real Copilot multi-turn with tool use and continuation", () => {
       // Real Copilot autopilot flow ending in task_complete (no ask_user).
       // The completion signal comes from the polling loop's idle detection,
-      // not from this function REDACTED here isComplete stays false because the
+      // not from this function — here isComplete stays false because the
       // last assistant entry has stop_reason "tool_use".
       const entries: TranscriptEntry[] = [
         { type: "user", message: { content: [{ type: "text", text: "list the files" }] }, sessionId: "s1" },

@@ -158,7 +158,7 @@ describe("transcript-reader", () => {
       const entry = parseLine(line);
       expect(entry).not.toBeNull();
       expect(entry?.type).toBe("assistant");
-      // null is ambiguous REDACTED could be intermediate or final REDACTED left as undefined
+      // null is ambiguous — could be intermediate or final — left as undefined
       expect(entry?.stop_reason).toBeUndefined();
     });
 
@@ -458,7 +458,7 @@ describe("transcript-reader", () => {
             content: [{ type: "text" as const, text: "NO_REPLY" }],
           },
           sessionId: "s1",
-          // stop_reason is undefined (null in JSON REDACTED ambiguous)
+          // stop_reason is undefined (null in JSON → ambiguous)
         },
         {
           type: "system" as const,
@@ -481,7 +481,7 @@ describe("transcript-reader", () => {
             content: [{ type: "text" as const, text: "Intermediate text" }],
           },
           sessionId: "s1",
-          // stop_reason undefined REDACTED could be intermediate
+          // stop_reason undefined — could be intermediate
         },
       ];
 
@@ -568,7 +568,7 @@ describe("transcript-reader", () => {
 
     it("ignores stale assistant entries from a previous turn when a user entry follows", () => {
       // Bug scenario: after --resume, the batch straddles two turns:
-      // [old_assistant (complete), new_user] REDACTED the old assistant must be skipped.
+      // [old_assistant (complete), new_user] — the old assistant must be skipped.
       const entries: TranscriptEntry[] = [
         {
           type: "assistant",

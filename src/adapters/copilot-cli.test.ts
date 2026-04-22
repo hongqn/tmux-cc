@@ -26,7 +26,7 @@ describe("CopilotCliAdapter", () => {
   describe("KPSS whitelist", () => {
     it("appends KPSS suffix when no whitelist configured", async () => {
       const adapter = new CopilotCliAdapter();
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ prompt");
 
       await adapter.sendMessage("sess", "win", "hello", "agent:main:cron:123");
 
@@ -38,7 +38,7 @@ describe("CopilotCliAdapter", () => {
       const adapter = new CopilotCliAdapter({
         kpssSessionWhitelist: ["*telegram*"],
       });
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ prompt");
 
       await adapter.sendMessage("sess", "win", "hello", "agent:main:telegram:group:-123");
 
@@ -51,7 +51,7 @@ describe("CopilotCliAdapter", () => {
         kpssSessionWhitelist: ["*telegram*"],
         kpssNonWhitelistBehavior: "no-kpss",
       });
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ prompt");
 
       await adapter.sendMessage("sess", "win", "hello", "agent:main:cron:abc-123");
 
@@ -105,7 +105,7 @@ describe("CopilotCliAdapter", () => {
       const adapter = new CopilotCliAdapter({
         kpssSessionWhitelist: ["*telegram*", "*main"],
       });
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ prompt");
 
       // Test main pattern
       await adapter.sendMessage("sess", "win", "hello", "agent:main:main");
@@ -124,7 +124,7 @@ describe("CopilotCliAdapter", () => {
       const adapter = new CopilotCliAdapter({
         kpssSessionWhitelist: ["*telegram*"],
       });
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED prompt");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ prompt");
 
       await adapter.sendMessage("sess", "win", "hello");
 
@@ -137,20 +137,20 @@ describe("CopilotCliAdapter", () => {
     it("returns true when pane shows ask_user options", async () => {
       const adapter = new CopilotCliAdapter();
       vi.mocked(tmuxManager.capturePane).mockResolvedValue(
-        "some text\nREDACTED to select REDACTED Enter to confirm REDACTED Esc to cancel\nREDACTED 1. Option",
+        "some text\n↑↓ to select · Enter to confirm · Esc to cancel\n❯ 1. Option",
       );
 
       const result = await adapter.isWaitingForUserInput("sess", "win");
       expect(result).toBe(true);
     });
 
-    it("returns true for new TUI string 'Enter to select REDACTED REDACTED/REDACTED to navigate REDACTED Esc to cancel'", async () => {
+    it("returns true for new TUI string 'Enter to select · ↑/↓ to navigate · Esc to cancel'", async () => {
       // Newer Copilot builds (and Claude Code's AskUserQuestion UI) render
       // the selector hint differently. The detection must accept both
       // variants so we don't silently lose ask_user routing on upgrade.
       const adapter = new CopilotCliAdapter();
       vi.mocked(tmuxManager.capturePane).mockResolvedValue(
-        "REDACTED 1. Add more\n  2. Done\n  3. Type something.\nEnter to select REDACTED REDACTED/REDACTED to navigate REDACTED Esc to cancel",
+        "❯ 1. Add more\n  2. Done\n  3. Type something.\nEnter to select · ↑/↓ to navigate · Esc to cancel",
       );
 
       const result = await adapter.isWaitingForUserInput("sess", "win");
@@ -160,7 +160,7 @@ describe("CopilotCliAdapter", () => {
     it("returns true when pane shows asking user indicator", async () => {
       const adapter = new CopilotCliAdapter();
       vi.mocked(tmuxManager.capturePane).mockResolvedValue(
-        "some text\nREDACTED Asking user What do you want?",
+        "some text\n○ Asking user What do you want?",
       );
 
       const result = await adapter.isWaitingForUserInput("sess", "win");
@@ -169,7 +169,7 @@ describe("CopilotCliAdapter", () => {
 
     it("returns false when pane shows normal prompt", async () => {
       const adapter = new CopilotCliAdapter();
-      vi.mocked(tmuxManager.capturePane).mockResolvedValue("REDACTED Type something");
+      vi.mocked(tmuxManager.capturePane).mockResolvedValue("❯ Type something");
 
       const result = await adapter.isWaitingForUserInput("sess", "win");
       expect(result).toBe(false);

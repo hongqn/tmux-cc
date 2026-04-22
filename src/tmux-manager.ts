@@ -85,7 +85,7 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
     // tasks (rate-limit or non-whitelisted/cron routing), so there is no
     // reason to let the agent pause on an interactive option selector.
     // Avoiding the tool also avoids the routing complexity of sendKeys
-    // vs. the selector UI REDACTED plain sendKeys always works on text prompts.
+    // vs. the selector UI — plain sendKeys always works on text prompts.
     "--disallowedTools",
     "AskUserQuestion",
     "--model",
@@ -117,7 +117,7 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
   try {
     await exec(`tmux set-option -t ${windowTarget} remain-on-exit on`);
   } catch {
-    // Non-fatal REDACTED diagnostics just won't be available
+    // Non-fatal — diagnostics just won't be available
   }
 
   // Pipe pane output to a log file for crash diagnostics.
@@ -143,7 +143,7 @@ export async function sendKeys(tmuxSession: string, windowName: string, text: st
   // Send the text in literal mode (no key binding interpretation)
   await exec(`tmux send-keys -t ${target} -l ${shellEscape(text)}`);
 
-  // Wait before pressing Enter REDACTED Claude Code TUI needs time
+  // Wait before pressing Enter — Claude Code TUI needs time
   await sleep(SEND_KEYS_DELAY_MS);
 
   // Press Enter
@@ -163,7 +163,7 @@ export async function sendTmuxKey(tmuxSession: string, windowName: string, key: 
  * Check if the agent process is alive in the given tmux window.
  *
  * Uses pane_dead as the authoritative signal (set by tmux's remain-on-exit).
- * pane_current_command is checked for diagnostics only REDACTED it can transiently
+ * pane_current_command is checked for diagnostics only — it can transiently
  * show a child-process name instead of the agent binary, so relying on it
  * for the alive/dead decision caused false-positive "agent process died"
  * crashes.
@@ -178,7 +178,7 @@ export async function isProcessAlive(tmuxSession: string, windowName: string, pr
     const dead = info.endsWith(" 1");
     if (dead) return false;
     // Pane is alive (pane_dead=0).  Log a warning if pane_current_command
-    // doesn't contain the expected process name REDACTED this can happen transiently
+    // doesn't contain the expected process name — this can happen transiently
     // when the agent spawns child processes but doesn't mean the agent died.
     if (!info.toLowerCase().includes(processName.toLowerCase())) {
       const cmd = info.replace(/ \d+$/, "").trim();
@@ -218,7 +218,7 @@ export async function killWindow(tmuxSession: string, windowName: string): Promi
 
 /**
  * Capture the last N lines from a tmux pane.
- * Useful for crash diagnostics REDACTED captures error messages CC may have
+ * Useful for crash diagnostics — captures error messages CC may have
  * printed before exiting.  Works with remain-on-exit panes.
  */
 export async function capturePane(tmuxSession: string, windowName: string, lines = 50): Promise<string> {
@@ -281,7 +281,7 @@ export async function cleanupCrashLog(windowName: string): Promise<void> {
 }
 
 /**
- * Check if Claude Code in a tmux window is ready (has the REDACTED prompt).
+ * Check if Claude Code in a tmux window is ready (has the ❯ prompt).
  * Unlike waitForReady, this does not wait or auto-dismiss prompts.
  */
 export async function isWindowReady(tmuxSession: string, windowName: string): Promise<boolean> {
@@ -298,7 +298,7 @@ export async function isWindowReady(tmuxSession: string, windowName: string): Pr
  * Check if Claude Code is actively processing in the tmux pane.
  * When Claude Code is working, the status line includes "esc to interrupt"
  * (sometimes truncated to "esc to int" by terminal width).
- * The REDACTED prompt is always visible in the TUI even during processing,
+ * The ❯ prompt is always visible in the TUI even during processing,
  * so we cannot use it for idle detection.
  */
 export async function isClaudeProcessing(tmuxSession: string, windowName: string): Promise<boolean> {
@@ -315,7 +315,7 @@ export async function isClaudeProcessing(tmuxSession: string, windowName: string
  * Wait for Claude Code to become ready in a tmux window.
  *
  * Phase 1: Wait for the `claude` process to appear (pane_current_command).
- * Phase 2: Wait for the TUI prompt (`REDACTED`) to appear in the pane content,
+ * Phase 2: Wait for the TUI prompt (`❯`) to appear in the pane content,
  * indicating the interactive input box is ready for keystrokes.
  *
  * @returns true if process is ready, false if timeout
@@ -338,7 +338,7 @@ export async function waitForReady(
     return false;
   }
 
-  // Phase 2: TUI prompt ready (look for the REDACTED prompt character)
+  // Phase 2: TUI prompt ready (look for the ❯ prompt character)
   // Also handles auto-dismissal of interactive prompts that block the TUI.
   while (Date.now() < deadline) {
     try {

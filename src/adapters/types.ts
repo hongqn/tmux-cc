@@ -1,5 +1,5 @@
 /**
- * AgentAdapter interface REDACTED abstraction layer for CLI agents (Claude Code, Copilot CLI, etc.).
+ * AgentAdapter interface — abstraction layer for CLI agents (Claude Code, Copilot CLI, etc.).
  *
  * Each adapter encapsulates the agent-specific logic:
  * - How to launch and detect the agent in tmux
@@ -41,7 +41,7 @@ export interface AgentAdapter {
   /** Model catalog for this agent */
   readonly models: AgentModelDef[];
 
-  // REDACTED Lifecycle REDACTED
+  // ─── Lifecycle ─────────────────────────────────────────────
 
   /**
    * Create a tmux window running the agent.
@@ -53,7 +53,7 @@ export interface AgentAdapter {
     workingDirectory: string;
     model: string;
     resumeSessionId?: string;
-    /** OpenClaw agent account ID REDACTED set as env var for MCP server to resolve botToken. */
+    /** OpenClaw agent account ID — set as env var for MCP server to resolve botToken. */
     agentAccountId?: string;
   }): Promise<void>;
 
@@ -110,7 +110,7 @@ export interface AgentAdapter {
    * (e.g., ask_user prompts) and message transformations (e.g., appending
    * keep-session prompts). Falls back to plain sendKeys if not implemented.
    *
-   * @param sessionKey - OpenClaw session key (e.g., "agent:main:telegram:group:...")
+   * @param sessionKey - OpenClaw session key (e.g., "agent:main:chat:group:-123")
    *   Used by adapters to decide whether to apply KPSS suffix.
    */
   sendMessage?(tmuxSession: string, windowName: string, text: string, sessionKey?: string): Promise<void>;
@@ -122,9 +122,9 @@ export interface AgentAdapter {
    */
   isWaitingForUserInput?(tmuxSession: string, windowName: string): Promise<boolean>;
 
-  // REDACTED Transcript REDACTED
+  // ─── Transcript ────────────────────────────────────────────
 
-  /** Snapshot existing transcript files (path REDACTED size) before creating a session. */
+  /** Snapshot existing transcript files (path → size) before creating a session. */
   getExistingTranscriptPaths(cwd: string): Map<string, number>;
 
   /** Find a transcript file by agent session ID. */
@@ -154,7 +154,7 @@ export interface AgentAdapter {
     opts?: { collectAllText?: boolean },
   ): AssistantResponse;
 
-  // REDACTED Workspace REDACTED
+  // ─── Workspace ─────────────────────────────────────────────
 
   /** Set up workspace files for this agent (config, instructions, etc.). */
   setupWorkspace(cwd: string): void;

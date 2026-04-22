@@ -1,5 +1,5 @@
 /**
- * Claude Code adapter REDACTED implements AgentAdapter for Claude Code CLI.
+ * Claude Code adapter — implements AgentAdapter for Claude Code CLI.
  *
  * Wraps existing CC-specific logic from tmux-manager.ts, transcript-reader.ts,
  * and index.ts workspace setup. This is a thin delegation layer; the original
@@ -84,16 +84,16 @@ const DEFAULT_CLAUDE_MD = `# Claude Code Project Instructions
 
 Read and follow the instructions in these files (in order):
 
-1. \`AGENTS.md\` REDACTED Workspace rules, behavior guidelines, and constraints
-2. \`SOUL.md\` REDACTED Character, personality, and communication style
-3. \`MEMORY.md\` REDACTED Conversation history, learned preferences, and context
+1. \`AGENTS.md\` — Workspace rules, behavior guidelines, and constraints
+2. \`SOUL.md\` — Character, personality, and communication style
+3. \`MEMORY.md\` — Conversation history, learned preferences, and context
 
 ---
 
 ## Messaging Protocol
 
 You are receiving messages from users through a messaging gateway.
-Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` REDACTED use these to identify who is speaking.
+Each incoming user message includes metadata headers like \`Conversation info\` and \`Sender\` — use these to identify who is speaking.
 
 ### Silent Replies (NO_REPLY)
 
@@ -104,7 +104,7 @@ NO_REPLY
 \`\`\`
 
 Rules:
-- It must be your ENTIRE message REDACTED nothing else
+- It must be your ENTIRE message — nothing else
 - Never append it to an actual response
 - Never wrap it in markdown or code blocks
 
@@ -116,7 +116,7 @@ You may receive heartbeat poll messages. If you receive one and there is nothing
 HEARTBEAT_OK
 \`\`\`
 
-If something needs attention, do NOT include "HEARTBEAT_OK" REDACTED reply with the alert/update text instead.
+If something needs attention, do NOT include "HEARTBEAT_OK" — reply with the alert/update text instead.
 If \`HEARTBEAT.md\` exists, read it and follow its instructions during heartbeats.
 `;
 
@@ -137,7 +137,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     this.pluginDir = opts.pluginDir ?? (import.meta.dirname ?? __dirname);
   }
 
-  // REDACTED Lifecycle REDACTED
+  // ─── Lifecycle ─────────────────────────────────────────────
 
   async createAgentWindow(params: {
     tmuxSession: string;
@@ -215,18 +215,18 @@ export class ClaudeCodeAdapter implements AgentAdapter {
    * one is active.
    *
    * Without routing, plain sendKeys at an AskUserQuestion prompt has the
-   * Enter key select whichever option is currently highlighted REDACTED the
+   * Enter key select whichever option is currently highlighted — the
    * typed characters can either be ignored or fuzzy-match an option, and
-   * the agent sees `User answered Claude's questions: Q REDACTED <wrong option>`
+   * the agent sees `User answered Claude's questions: Q → <wrong option>`
    * instead of the user's actual message. This is the same failure mode
    * the Copilot adapter already avoids for its own ask_user UI.
    *
    * CC's AskUserQuestion TUI lays out options as:
-   *   REDACTED 1. <agent option 1>
+   *   ❯ 1. <agent option 1>
    *     2. <agent option 2>
    *     ...
    *     N+1. Type something.    <-- we navigate here to open freeform input
-   *   REDACTED
+   *   ────
    *     N+2. Chat about this
    *
    * We locate "Type something." by its line marker, navigate to it, press
@@ -266,7 +266,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
    */
   private isAskUserQuestionPrompt(pane: string): boolean {
     return (
-      pane.includes("REDACTED/REDACTED to navigate") &&
+      pane.includes("↑/↓ to navigate") &&
       pane.includes("Esc to cancel") &&
       pane.includes("Type something")
     );
@@ -275,14 +275,14 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   /**
    * Extract the option number of the "Type something." row from the
    * captured pane. CC renders it like "  3. Type something." with leading
-   * whitespace and an optional "REDACTED" selector marker; we accept both.
+   * whitespace and an optional "❯" selector marker; we accept both.
    */
   private findTypeSomethingOptionIndex(pane: string): number {
-    const m = pane.match(/^\s*[REDACTED>]?\s*(\d+)\.\s*Type something/m);
+    const m = pane.match(/^\s*[❯>]?\s*(\d+)\.\s*Type something/m);
     return m ? parseInt(m[1], 10) : 0;
   }
 
-  /** Detect that CC is paused on an AskUserQuestion REDACTED used by KPSS cleanup protection. */
+  /** Detect that CC is paused on an AskUserQuestion — used by KPSS cleanup protection. */
   async isWaitingForUserInput(tmuxSession: string, windowName: string): Promise<boolean> {
     try {
       const pane = await capturePane(tmuxSession, windowName, 30);
@@ -315,7 +315,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       } else if (content.includes("How is Claude doing this session")) {
         // Post-turn feedback survey. If we don't dismiss it, the TUI blocks on
         // the keypress and no transcript entry is written until the user
-        // answers REDACTED idleCap fires 10 min later. Pick "0: Dismiss".
+        // answers — idleCap fires 10 min later. Pick "0: Dismiss".
         console.log(`[claude-code] auto-dismissing feedback survey`);
         await sendTmuxKey(tmuxSession, windowName, "0");
       } else if (content.includes("[Pasted text #")) {
@@ -327,7 +327,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     }
   }
 
-  // REDACTED Transcript REDACTED
+  // ─── Transcript ────────────────────────────────────────────
 
   getExistingTranscriptPaths(cwd: string): Map<string, number> {
     return trGetExistingPaths(cwd);
@@ -367,7 +367,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     return trExtractResponse(entries, opts);
   }
 
-  // REDACTED Workspace REDACTED
+  // ─── Workspace ─────────────────────────────────────────────
 
   setupWorkspace(cwd: string): void {
     this.writeMcpSettings(cwd);
@@ -381,7 +381,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     return match?.agentModelId ?? bare;
   }
 
-  // REDACTED Private helpers REDACTED
+  // ─── Private helpers ───────────────────────────────────────
 
   private writeMcpSettings(_workingDirectory: string): void {
     const claudeJsonPath = join(homedir(), ".claude.json");
@@ -392,7 +392,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     try {
       data = JSON.parse(readFileSync(claudeJsonPath, "utf-8")) as Record<string, unknown>;
     } catch {
-      // File doesn't exist or isn't valid JSON REDACTED start fresh
+      // File doesn't exist or isn't valid JSON — start fresh
     }
 
     const mcpServers = (data.mcpServers ?? {}) as Record<string, unknown>;

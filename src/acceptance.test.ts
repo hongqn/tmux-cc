@@ -81,7 +81,7 @@ describe("acceptance: session lifecycle", () => {
       if (cmd.includes("select-window")) throw new Error("window not found");
       if (cmd.includes("new-window")) return "";
       if (cmd.includes("list-panes") && cmd.includes("pane_current_command")) return "claude 0";
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
 
@@ -112,7 +112,7 @@ describe("acceptance: session lifecycle", () => {
         return "";
       }
       if (cmd.includes("pane_current_command")) return "claude 0";
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
 
@@ -141,7 +141,7 @@ describe("acceptance: session lifecycle", () => {
         if (aliveCheckCount === 1) return "claude 1";  // pane_dead=1 (remain-on-exit)
         return "claude 0";
       }
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
 
@@ -171,7 +171,7 @@ describe("acceptance: session lifecycle", () => {
   it("cleans up idle sessions after timeout", async () => {
     execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("pane_current_command")) return "claude 0";
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
 
@@ -353,7 +353,7 @@ describe("acceptance: model selection", () => {
     execMock.mockImplementation(mockRouter((cmd: string) => {
       if (cmd.includes("select-window")) throw new Error("window not found");
       if (cmd.includes("pane_current_command")) return "claude 0";
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
   });
@@ -370,7 +370,7 @@ describe("acceptance: model selection", () => {
         return "";
       }
       if (cmd.includes("pane_current_command")) return "claude 0";
-      if (cmd.includes("capture-pane")) return "REDACTED ";
+      if (cmd.includes("capture-pane")) return "❯ ";
       return "";
     }));
 
@@ -405,7 +405,7 @@ describe("acceptance: model selection", () => {
       if (cmd.includes("capture-pane")) {
         processingCallCount++;
         if (processingCallCount <= 1) return "esc to interrupt";
-        return "REDACTED ";
+        return "❯ ";
       }
       return "";
     }));

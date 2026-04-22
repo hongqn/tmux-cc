@@ -176,7 +176,7 @@ export function createMcpServer(): Server {
     }
 
     const result = await executeTool(name, (args ?? {}) as Record<string, unknown>);
-    // Pass through content blocks as-is REDACTED they may be text, image, or other MCP types
+    // Pass through content blocks as-is — they may be text, image, or other MCP types
     const mappedContent: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
     for (const c of result.content) {
       if (c.type === "image") {
@@ -195,7 +195,7 @@ export function createMcpServer(): Server {
             writeFileSync(filePath, Buffer.from(data, "base64"));
             mappedContent.push({ type: "text" as const, text: `Screenshot saved to: ${filePath}` });
           } catch {
-            // Saving failed REDACTED image block is still returned
+            // Saving failed — image block is still returned
           }
         } else {
           mappedContent.push({ type: "text" as const, text: "(empty image)" });

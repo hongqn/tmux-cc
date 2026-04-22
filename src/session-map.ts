@@ -31,18 +31,18 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 
-/** Unique ID for this module instance REDACTED detects multiple module loads. */
+/** Unique ID for this module instance — detects multiple module loads. */
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
 console.log(`[tmux-cc] module instance ${MODULE_INSTANCE_ID} loaded`);
 
-/** In-memory map of session key REDACTED session state. */
+/** In-memory map of session key → session state. */
 const sessions = new Map<string, SessionState>();
 
 /** Handle for the idle cleanup interval timer. */
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Whether this module instance has ever created a session.
- *  Used to guard orphan cleanup REDACTED a process that never creates sessions
+ *  Used to guard orphan cleanup — a process that never creates sessions
  *  (e.g., openclaw-agent) must not kill windows it doesn't own. */
 let hasEverCreatedSession = false;
 
@@ -51,7 +51,7 @@ export function _setHasEverCreatedSession(value: boolean): void {
   hasEverCreatedSession = value;
 }
 
-/** Cache of gateway sessionId REDACTED agent ID. */
+/** Cache of gateway sessionId → agent ID. */
 const agentIdCache = new Map<string, string>();
 
 /**
@@ -76,7 +76,7 @@ export async function resolveAgentId(gatewaySessionId: string | undefined): Prom
       try {
         await stat(sessionFile);
         agentIdCache.set(gatewaySessionId, agentDir);
-        console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} REDACTED ${agentDir}`);
+        console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} → ${agentDir}`);
         return agentDir;
       } catch {
         // File doesn't exist in this agent dir
@@ -88,17 +88,17 @@ export async function resolveAgentId(gatewaySessionId: string | undefined): Prom
   return null;
 }
 
-/** Cache of gateway sessionId REDACTED openclaw session key name (e.g. "agent:myagent:main"). */
+/** Cache of gateway sessionId → openclaw session key name (e.g. "agent:myagent:main"). */
 const sessionKeyNameCache = new Map<string, string>();
 
 /**
  * Resolve the OpenClaw session key name from a gateway session UUID.
  *
  * Looks up the agent's sessions.json to find the key (e.g., "agent:myagent:main",
- * "agent:myagent:telegram:slash:123") that maps to the given UUID.
+ * "agent:myagent:chat:slash:123") that maps to the given UUID.
  *
- * This key name is what the KPSS whitelist patterns (like "*telegram*", "*main")
- * were designed to match against.
+ * This key name is what the KPSS whitelist patterns (like "*chat*", "*main")
+ * are designed to match against.
  */
 export async function resolveSessionKeyName(
   gatewaySessionId: string | undefined,
@@ -116,7 +116,7 @@ export async function resolveSessionKeyName(
     for (const [keyName, entry] of Object.entries(data)) {
       if ((entry as { sessionId?: string }).sessionId === gatewaySessionId) {
         sessionKeyNameCache.set(cacheKey, keyName);
-        console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} REDACTED ${keyName}`);
+        console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} → ${keyName}`);
         return keyName;
       }
     }
@@ -189,9 +189,9 @@ export async function getOrCreateSession(
       : await tmuxIsProcessAlive(mergedConfig.tmuxSession, existing.windowName);
 
     if (alive) {
-      // Model changed REDACTED use adapter's switchModel (handles interrupt + idle wait)
+      // Model changed — use adapter's switchModel (handles interrupt + idle wait)
       if (existing.model !== model) {
-        console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} REDACTED ${model}), switching model for key=${sessionKey}`);
+        console.log(`[tmux-cc] getOrCreateSession: model changed (${existing.model} → ${model}), switching model for key=${sessionKey}`);
         if (adapter) {
           await adapter.switchModel(mergedConfig.tmuxSession, existing.windowName, model);
         } else {
@@ -204,7 +204,7 @@ export async function getOrCreateSession(
       return existing;
     }
 
-    // Process died REDACTED restart with --resume
+    // Process died — restart with --resume
     console.log(`[tmux-cc] getOrCreateSession: restarting dead session key=${sessionKey}, window=${existing.windowName}`);
     return await restartSession(existing, mergedConfig, adapter);
   }
@@ -262,7 +262,7 @@ async function createNewSession(
   }
 
   // Check if we have a persisted Claude session ID from a previous run.
-  // Scoped by adapter id REDACTED Copilot's session ids live in ~/.copilot/session-state/
+  // Scoped by adapter id — Copilot's session ids live in ~/.copilot/session-state/
   // and CC's live in ~/.claude/projects/, so crossing them kills --resume.
   const persistedClaudeId = getPersistedClaudeSessionId(sessionKey, adapter?.id ?? "claude-code");
   console.log(`[tmux-cc] createNewSession: key=${sessionKey}, window=${windowName}, model=${model}, persistedId=${persistedClaudeId ?? "none"}, cwd=${config.workingDirectory}`);
@@ -393,7 +393,7 @@ function discoverTranscript(state: SessionState, workingDirectory: string, adapt
       return;
     }
     if (!adapter) {
-      // Legacy fallback REDACTED dynamic import not feasible in sync function
+      // Legacy fallback — dynamic import not feasible in sync function
       // This path is only used during cleanup, not critical
     }
   }
@@ -421,7 +421,7 @@ export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promis
         try {
           const waiting = await state.adapter.isWaitingForUserInput(mergedConfig.tmuxSession, state.windowName);
           if (waiting) {
-            console.log(`[tmux-cc] cleanupIdleSessions: skipping key=${key}, window=${state.windowName} REDACTED waiting for user input (KPSS)`);
+            console.log(`[tmux-cc] cleanupIdleSessions: skipping key=${key}, window=${state.windowName} — waiting for user input (KPSS)`);
             continue;
           }
         } catch {
@@ -444,7 +444,7 @@ export async function cleanupIdleSessions(config: TmuxClaudeConfig = {}): Promis
 
 /**
  * Grace period before eager cleanup kills an idle session (ms).
- * Shorter than idleTimeoutMs REDACTED this fires after a stream completes
+ * Shorter than idleTimeoutMs — this fires after a stream completes
  * to reclaim sessions that won't receive new messages soon (e.g., cron one-shots).
  */
 const EAGER_CLEANUP_GRACE_MS = 120_000; // 2 minutes
@@ -473,7 +473,7 @@ export function scheduleEagerCleanup(
     const current = sessions.get(sessionKey);
     if (!current) return; // already cleaned up
     if (current.lastActivityMs !== activityAtSchedule) {
-      // Session was active again REDACTED a new message arrived, skip cleanup
+      // Session was active again — a new message arrived, skip cleanup
       console.log(`[tmux-cc] eagerCleanup: session key=${sessionKey} has new activity, skipping`);
       return;
     }
@@ -527,9 +527,9 @@ export async function cleanupOrphanedWindows(config: TmuxClaudeConfig = {}): Pro
 
   // Guard: only clean up orphans if this process has actively created sessions.
   // Other processes (e.g., openclaw-agent) load this module but never create
-  // sessions REDACTED their empty sessions map would wrongly flag ALL windows as orphans.
+  // sessions — their empty sessions map would wrongly flag ALL windows as orphans.
   if (!hasEverCreatedSession) {
-    console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID} skipping REDACTED no sessions ever created in this process`);
+    console.log(`[tmux-cc] cleanupOrphanedWindows: inst=${MODULE_INSTANCE_ID} skipping — no sessions ever created in this process`);
     return 0;
   }
 

@@ -1,5 +1,5 @@
 /**
- * Persist session key REDACTED Claude Code session ID mapping to disk.
+ * Persist session key → Claude Code session ID mapping to disk.
  *
  * This allows the plugin to resume Claude Code sessions after both the
  * gateway and the tmux window have been restarted (e.g., idle timeout
@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Persisted session entry (minimal REDACTED only what's needed for --resume). */
+/** Persisted session entry (minimal — only what's needed for --resume). */
 interface PersistedSession {
   claudeSessionId: string;
   model: string;
@@ -49,7 +49,7 @@ function loadRaw(): PersistedData {
       return data;
     }
   } catch {
-    // File doesn't exist or is corrupt REDACTED start fresh
+    // File doesn't exist or is corrupt — start fresh
   }
   return { sessions: {}, stableKeys: {} };
 }
@@ -59,7 +59,7 @@ function save(data: PersistedData): void {
     mkdirSync(PERSIST_DIR, { recursive: true });
     writeFileSync(PERSIST_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch {
-    // Best effort REDACTED don't crash the plugin
+    // Best effort — don't crash the plugin
   }
 }
 
@@ -152,7 +152,7 @@ export function removePersistedSession(sessionKey: string, adapterId?: string): 
 
 /**
  * Look up a persisted Claude session ID for a given (sessionKey, adapter)
- * pair. Legacy un-scoped entries are ignored on purpose REDACTED feeding e.g.
+ * pair. Legacy un-scoped entries are ignored on purpose — feeding e.g.
  * Copilot's session id to the CC adapter's --resume kills the process.
  * After the first persistSession call with a scoped key, the legacy
  * entry is orphaned and pruned by the 7-day TTL in loadPersistedSessions.
@@ -182,7 +182,7 @@ export function getStableSessionKey(identifier: string): string | undefined {
 
 /**
  * Record a sessionKey under a conversation identifier so later invocations
- * with the same identifier (or a sibling one REDACTED see the two-identifier
+ * with the same identifier (or a sibling one — see the two-identifier
  * persist in stream-fn.ts) recover the same tmux window.
  */
 export function persistStableSessionKey(
@@ -203,7 +203,7 @@ export function persistStableSessionKey(
 
 /**
  * Remove every stableKeys entry pointing at the given sessionKey. Used by
- * the before_reset hook so /new wipes identifier REDACTED sessionKey mappings
+ * the before_reset hook so /new wipes identifier → sessionKey mappings
  * alongside the window and Claude session id.
  */
 export function removeStableSessionKeysFor(sessionKey: string): void {
