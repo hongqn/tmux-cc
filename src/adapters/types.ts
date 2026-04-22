@@ -110,7 +110,7 @@ export interface AgentAdapter {
    * (e.g., ask_user prompts) and message transformations (e.g., appending
    * keep-session prompts). Falls back to plain sendKeys if not implemented.
    *
-   * @param sessionKey - OpenClaw session key (e.g., "agent:main:chat:group:-123")
+   * @param sessionKey - OpenClaw session key (e.g., "agent:main:telegram:group:-123")
    *   Used by adapters to decide whether to apply KPSS suffix.
    */
   sendMessage?(tmuxSession: string, windowName: string, text: string, sessionKey?: string): Promise<void>;
