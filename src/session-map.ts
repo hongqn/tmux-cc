@@ -95,10 +95,10 @@ const sessionKeyNameCache = new Map<string, string>();
  * Resolve the OpenClaw session key name from a gateway session UUID.
  *
  * Looks up the agent's sessions.json to find the key (e.g., "agent:myagent:main",
- * "agent:myagent:telegram:slash:123") that maps to the given UUID.
+ * "agent:myagent:chat:slash:123") that maps to the given UUID.
  *
- * This key name is what the KPSS whitelist patterns (like "*telegram*", "*main")
- * were designed to match against.
+ * This key name is what the KPSS whitelist patterns (like "*chat*", "*main")
+ * are designed to match against.
  */
 export async function resolveSessionKeyName(
   gatewaySessionId: string | undefined,

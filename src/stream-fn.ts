@@ -44,6 +44,12 @@ import {
 import type { TmuxClaudeConfig, SessionState, AssistantResponse, TranscriptEntry } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
+const AUTO_COMPACT_STABILIZE_DELAY_MS = 2000;
+const AUTO_COMPACT_IDLE_TIMEOUT_MS = 180_000;
+const SEND_CONFIRM_TIMEOUT_MS = 45_000;
+const SEND_CONFIRM_RETRY_DELAY_MS = 1000;
+const SEND_CONFIRM_MAX_ATTEMPTS = 3;
+
 export interface StreamFnOptions {
   /** Plugin configuration. */
   config: TmuxClaudeConfig;
@@ -255,35 +261,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 5.5: Wait for agent to finish auto-compaction on resume.
         // When CC resumes with --resume, it may auto-compact right after
-        // showing the REDACTED prompt. waitForReady detects REDACTED and returns, but
-        // CC immediately starts processing /compact. Any message sent via
-        // sendKeys during compaction is lost. Wait for CC to become idle.
-        {
-          const STABILIZE_DELAY_MS = 2000;
-          const IDLE_TIMEOUT_MS = 120_000;
-          await sleep(STABILIZE_DELAY_MS);
-          const processing = adapter
-            ? await adapter.isProcessing(config.tmuxSession, session.windowName)
-            : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
-          if (processing) {
-            console.log(`[tmux-cc] agent is processing (auto-compacting?), waiting for idle...`);
-            const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
-            while (Date.now() < idleDeadline) {
-              await sleep(1000);
-              if (cancelled) {
-                console.log(`[tmux-cc] cancelled while waiting for idle`);
-                return;
-              }
-              const still = adapter
-                ? await adapter.isProcessing(config.tmuxSession, session.windowName)
-                : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
-              if (!still) {
-                console.log(`[tmux-cc] agent is now idle after auto-compaction`);
-                break;
-              }
-            }
-          }
-        }
+        // showing the prompt. A tmux send during compaction can be accepted by
+        // tmux but never land in the CC transcript, so wait before first send.
+        const readyForSend = await waitForAgentIdleAfterPossibleCompact(
+          session,
+          config,
+          adapter,
+          () => cancelled,
+        );
+        if (!readyForSend) return;
 
         // Step 6: Record current transcript offset before sending.
         // The session's transcriptPath was set during createNewSession
@@ -304,11 +290,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 7: Send message via tmux (adapter may transform and handle UI state)
         console.log(`[tmux-cc] sendKeys: length=${finalText.length}`);
         try {
-          if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
-          } else {
-            await sendKeys(config.tmuxSession, session.windowName, finalText);
-          }
+          offsetBeforeSend = await sendMessageReliably(
+            session,
+            finalText,
+            offsetBeforeSend,
+            config,
+            adapter,
+            sessionKeyName ?? sessionId,
+            () => cancelled,
+          );
         } catch (e) {
           // Window may have been killed between isProcessAlive check and sendKeys
           console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
@@ -343,14 +333,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Streaming state REDACTED tracked across polls to emit incremental events.
         // Each transcript entry becomes its own text content block. Emitting as
-        // text (not thinking) is what makes progress reach Telegram block
+        // text (not thinking) is what makes progress reach messaging channel block
         // replies: OpenClaw's pi-embedded-subscribe early-returns on thinking_*
         // events unless reasoningLevel is "stream", so thinking_* never hits
         // the block-reply pipeline. text_* events do, and text_end triggers
         // flushBlockReplyBuffer REDACTED onBlockReply per entry.
         //
         // Requires blockStreamingBreak: "text_end" (default) and
-        // blockStreamingCoalesce.idleMs >= 1 on the Telegram channel config;
+        // blockStreamingCoalesce.idleMs >= 1 on the messaging channel config;
         // idleMs: 0 disables the idle timer entirely and batches everything
         // to turn end.
         let lastProcessedEntryIdx = 0;
@@ -378,7 +368,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             // Only stream natural-language reasoning: real thinking content
             // (usually empty for CC login auth) and CC's prose commentary
             // between tool calls. Skip tool_use blocks REDACTED users don't want
-            // "ðREDACTED Bash: ..." noise in Telegram, just the thinking.
+            // "ðREDACTED Bash: ..." noise in messaging channels, just the thinking.
             const parts: string[] = [];
             for (const block of entry.message.content) {
               if (block.type === "thinking" && block.thinking) {
@@ -397,7 +387,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           // keep the gateway stream alive during long CC thinking phases with
           // no transcript writes. Empty thinking_delta is dropped by OpenClaw
           // (emitReasoningStream early-returns on empty text), so this is
-          // invisible to Telegram.
+          // invisible to messaging channels.
           const now = Date.now();
           if (now - lastStreamEventMs >= HEARTBEAT_INTERVAL_MS) {
             const beat: ThinkingContent = { type: "thinking", thinking: "" };
@@ -436,11 +426,16 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
                 if (text) {
                   console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
                   try {
-                    if (adapter?.sendMessage) {
-                      await adapter.sendMessage(config.tmuxSession, session.windowName, text, sessionKeyName ?? sessionId);
-                    } else {
-                      await sendKeys(config.tmuxSession, session.windowName, text);
-                    }
+                    const steeringOffset = getTranscriptSize(session);
+                    await sendMessageReliably(
+                      session,
+                      text,
+                      steeringOffset,
+                      config,
+                      adapter,
+                      sessionKeyName ?? sessionId,
+                      () => cancelled,
+                    );
                     injected++;
                   } catch (e) {
                     console.error(`[tmux-cc] steering: sendKeys failed: ${e instanceof Error ? e.message : e}`);
@@ -475,11 +470,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           offsetBeforeSend = 0;
 
           console.log(`[tmux-cc] re-sending message after restart, length=${finalText.length}`);
-          if (adapter?.sendMessage) {
-            await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
-          } else {
-            await sendKeys(config.tmuxSession, session.windowName, finalText);
-          }
+          offsetBeforeSend = await sendMessageReliably(
+            session,
+            finalText,
+            offsetBeforeSend,
+            config,
+            adapter,
+            sessionKeyName ?? sessionId,
+            () => cancelled,
+          );
           response = await pollForResponse(session, offsetBeforeSend, config, adapter, onNewEntries, () => cancelled, checkSteering);
         }
 
@@ -540,14 +539,18 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
               session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
               cancelSession = session;
               console.log(`[tmux-cc] fallback session: window=${session.windowName}, model=${session.model}`);
-              if (adapter.sendMessage) {
-                await adapter.sendMessage(config.tmuxSession, session.windowName, finalText, sessionKeyName ?? sessionId);
-              } else {
-                await sendKeys(config.tmuxSession, session.windowName, finalText);
-              }
+              const fallbackOffset = await sendMessageReliably(
+                session,
+                finalText,
+                0,
+                runConfig,
+                adapter,
+                sessionKeyName ?? sessionId,
+                () => cancelled,
+              );
               // Re-poll against the fresh session. Start from offset 0 REDACTED
               // updateTranscriptPath will re-discover via the snapshot.
-              const retryResponse = await pollForResponse(session, 0, runConfig, adapter, onNewEntries, () => cancelled, checkSteering);
+              const retryResponse = await pollForResponse(session, fallbackOffset, runConfig, adapter, onNewEntries, () => cancelled, checkSteering);
               if (retryResponse?.text) {
                 response = retryResponse;
                 console.log(`[tmux-cc] mid-stream fallback retry succeeded, textLen=${response.text.length}`);
@@ -871,6 +874,162 @@ const RATE_LIMIT_PATTERNS = [
  */
 function containsRateLimitError(content: string): boolean {
   return RATE_LIMIT_PATTERNS.some(re => re.test(content));
+}
+
+async function waitForAgentIdleAfterPossibleCompact(
+  session: SessionState,
+  config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
+  isCancelled?: () => boolean,
+): Promise<boolean> {
+  await sleep(AUTO_COMPACT_STABILIZE_DELAY_MS);
+  const processing = adapter
+    ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+    : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+  if (!processing) return true;
+
+  console.log(`[tmux-cc] agent is processing (auto-compacting?), waiting for idle...`);
+  const idleDeadline = Date.now() + AUTO_COMPACT_IDLE_TIMEOUT_MS;
+  while (Date.now() < idleDeadline) {
+    await sleep(1000);
+    if (isCancelled?.()) {
+      console.log(`[tmux-cc] cancelled while waiting for idle`);
+      return false;
+    }
+    const still = adapter
+      ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+      : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+    if (!still) {
+      console.log(`[tmux-cc] agent is now idle after auto-compaction`);
+      return true;
+    }
+  }
+
+  console.error(`[tmux-cc] agent did not become idle before send idle timeout`);
+  return false;
+}
+
+async function sendMessageReliably(
+  session: SessionState,
+  text: string,
+  offsetBeforeSend: number,
+  config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
+  sessionKey?: string,
+  isCancelled?: () => boolean,
+): Promise<number> {
+  let baseOffset = offsetBeforeSend;
+  for (let attempt = 1; attempt <= SEND_CONFIRM_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      const ready = await waitForAgentIdleAfterPossibleCompact(session, config, adapter, isCancelled);
+      if (!ready) throw new Error("Agent was not ready for message retry");
+      console.log(`[tmux-cc] send confirm: retrying message attempt ${attempt}/${SEND_CONFIRM_MAX_ATTEMPTS}`);
+    }
+
+    if (adapter?.sendMessage) {
+      await adapter.sendMessage(config.tmuxSession, session.windowName, text, sessionKey);
+    } else {
+      await sendKeys(config.tmuxSession, session.windowName, text);
+    }
+
+    const confirmed = await waitForUserTurnInTranscript(
+      session,
+      text,
+      baseOffset,
+      config,
+      adapter,
+      isCancelled,
+    );
+    if (confirmed) return confirmed.offsetBeforeTurn;
+
+    if (isCancelled?.()) throw new Error("Cancelled while confirming sent message");
+
+    const alive = adapter
+      ? await adapter.isProcessAlive(config.tmuxSession, session.windowName)
+      : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
+    if (!alive) throw new Error("Agent process died while confirming sent message");
+
+    console.warn(`[tmux-cc] send confirm: no user transcript entry after attempt ${attempt}/${SEND_CONFIRM_MAX_ATTEMPTS}`);
+    await sleep(SEND_CONFIRM_RETRY_DELAY_MS);
+  }
+
+  throw new Error("Message was not accepted by the agent transcript after retries");
+}
+
+async function waitForUserTurnInTranscript(
+  session: SessionState,
+  expectedText: string,
+  offsetBeforeSend: number,
+  config: Required<TmuxClaudeConfig>,
+  adapter?: AgentAdapter,
+  isCancelled?: () => boolean,
+): Promise<{ offsetBeforeTurn: number } | null> {
+  const deadline = Date.now() + SEND_CONFIRM_TIMEOUT_MS;
+  let baseOffset = offsetBeforeSend;
+
+  while (Date.now() < deadline) {
+    if (isCancelled?.()) return null;
+
+    if (!session.transcriptPath) {
+      updateTranscriptPath(session, config.workingDirectory, adapter);
+      if (session.transcriptPath && baseOffset === 0) {
+        baseOffset = session.transcriptOffset;
+      }
+    }
+
+    if (session.transcriptPath) {
+      const result = adapter
+        ? adapter.readNewEntries(session.transcriptPath, baseOffset)
+        : trReadNewEntries(session.transcriptPath, baseOffset);
+      if (transcriptContainsUserText(result.entries, expectedText)) {
+        console.log(`[tmux-cc] send confirm: user turn accepted in transcript`);
+        return { offsetBeforeTurn: baseOffset };
+      }
+    }
+
+    const processing = adapter
+      ? await adapter.isProcessing(config.tmuxSession, session.windowName)
+      : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName);
+    if (!processing && session.transcriptPath) {
+      const pane = await capturePane(config.tmuxSession, session.windowName, 20).catch(() => "");
+      if (pane && pane.includes("[Pasted text #")) {
+        console.log(`[tmux-cc] send confirm: pasted text not submitted, sending Enter`);
+        await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
+      }
+    }
+
+    await sleep(Math.min(config.pollingIntervalMs, 1000));
+  }
+
+  return null;
+}
+
+function getTranscriptSize(session: SessionState): number {
+  if (!session.transcriptPath) return 0;
+  try {
+    return statSync(session.transcriptPath).size;
+  } catch {
+    return 0;
+  }
+}
+
+export function transcriptContainsUserText(entries: TranscriptEntry[], expectedText: string): boolean {
+  const expected = normalizeTranscriptText(expectedText);
+  if (!expected) return false;
+
+  return entries.some((entry) => {
+    if (entry.type !== "user") return false;
+    const text = entry.message.content
+      .flatMap((block) => block.type === "text" ? [block.text] : [])
+      .join("\n");
+    const normalized = normalizeTranscriptText(text);
+    if (!normalized) return false;
+    return normalized.includes(expected) || expected.includes(normalized);
+  });
+}
+
+function normalizeTranscriptText(text: string): string {
+  return text.replace(/\r\n/g, "\n").trim();
 }
 
 /**
