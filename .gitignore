@@ -5,3 +5,7 @@ dist/
 .local/
 .agents/
 .claude/
+# Personal/local-only files retained on developer machines but excluded from public repo
+AGENTS.md
+scripts/deploy.sh
+replacements.txt
