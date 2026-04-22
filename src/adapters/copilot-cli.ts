@@ -88,7 +88,7 @@ export interface CopilotCliAdapterOptions {
    * get the KPSS suffix appended (which causes the agent to call ask_user,
    * keeping the session alive for multi-turn without per-request billing).
    *
-   * Example: ["telegram:group:*", "telegram:*"]
+   * Example: ["chat:group:*", "chat:*"]
    *
    * If empty or undefined, KPSS is applied to ALL sessions (legacy behavior).
    */

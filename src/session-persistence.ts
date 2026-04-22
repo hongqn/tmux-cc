@@ -24,7 +24,7 @@ interface PersistedData {
   sessions: Record<string, PersistedSession>;
   /**
    * Mapping from an external conversation identifier (gateway sessionId or
-   * OpenClaw session key name like "agent:main:telegram:group:...") to the
+   * OpenClaw session key name like "agent:main:chat:group:...") to the
    * tmux-cc sessionKey (tmux- hash) originally derived for it. Lets msg 1
    * (race, sessionKeyName not yet resolvable) and msg 2 (sessionKeyName
    * resolvable, different hash) land on the same tmux window.
