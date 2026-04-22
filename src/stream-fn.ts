@@ -333,14 +333,14 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Streaming state REDACTED tracked across polls to emit incremental events.
         // Each transcript entry becomes its own text content block. Emitting as
-        // text (not thinking) is what makes progress reach messaging channel block
+        // text (not thinking) is what makes progress reach Telegram block
         // replies: OpenClaw's pi-embedded-subscribe early-returns on thinking_*
         // events unless reasoningLevel is "stream", so thinking_* never hits
         // the block-reply pipeline. text_* events do, and text_end triggers
         // flushBlockReplyBuffer REDACTED onBlockReply per entry.
         //
         // Requires blockStreamingBreak: "text_end" (default) and
-        // blockStreamingCoalesce.idleMs >= 1 on the messaging channel config;
+        // blockStreamingCoalesce.idleMs >= 1 on the Telegram channel config;
         // idleMs: 0 disables the idle timer entirely and batches everything
         // to turn end.
         let lastProcessedEntryIdx = 0;
@@ -368,7 +368,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             // Only stream natural-language reasoning: real thinking content
             // (usually empty for CC login auth) and CC's prose commentary
             // between tool calls. Skip tool_use blocks REDACTED users don't want
-            // "ðREDACTED Bash: ..." noise in messaging channels, just the thinking.
+            // "ðREDACTED Bash: ..." noise in Telegram, just the thinking.
             const parts: string[] = [];
             for (const block of entry.message.content) {
               if (block.type === "thinking" && block.thinking) {
@@ -387,7 +387,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           // keep the gateway stream alive during long CC thinking phases with
           // no transcript writes. Empty thinking_delta is dropped by OpenClaw
           // (emitReasoningStream early-returns on empty text), so this is
-          // invisible to messaging channels.
+          // invisible to Telegram.
           const now = Date.now();
           if (now - lastStreamEventMs >= HEARTBEAT_INTERVAL_MS) {
             const beat: ThinkingContent = { type: "thinking", thinking: "" };

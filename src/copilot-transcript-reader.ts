@@ -329,7 +329,7 @@ function parseAssistantMessage(event: CopilotEvent, sessionId: string): Transcri
       : undefined;
 
   // Append ask_user question as text so it appears in the response
-  // visible to the user. Without this, only the text content before ask_user shows.
+  // visible in Telegram. Without this, only the text content before ask_user shows.
   if (hasAskUser) {
     const askUserReq = toolRequests!.find((r) => r.name === "ask_user");
     const question = askUserReq?.arguments?.question as string | undefined;
