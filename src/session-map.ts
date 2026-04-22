@@ -54,7 +54,11 @@ export function _setHasEverCreatedSession(value: boolean): void {
 /** Resolved location of an openclaw session: which agent owns it and its key name. */
 export type SessionLocation = { agentId: string; keyName: string | null };
 
-/** Combined cache of gateway sessionId → resolved location. Only successful lookups are cached. */
+/**
+ * Combined cache of gateway sessionId → resolved location. Only successful lookups are cached.
+ * Negative results are intentionally NOT cached so a delayed sessions.json write can still
+ * resolve on retry (and so the REQ-007 warning can flip to success on a later turn).
+ */
 const sessionLocationCache = new Map<string, SessionLocation>();
 
 /** Tracks sessionIds for which a "not found" warning has already been emitted (per-process dedup). */
@@ -177,12 +181,8 @@ export async function resolveAgentId(gatewaySessionId: string | undefined): Prom
  */
 export async function resolveSessionKeyName(
   gatewaySessionId: string | undefined,
-  agentId: string | undefined,
 ): Promise<string | null> {
   if (!gatewaySessionId) return null;
-  // agentId param is kept for API compatibility but is no longer needed; the
-  // combined resolver already returns the keyName in the same scan.
-  void agentId;
   const location = await resolveSessionLocation(gatewaySessionId);
   return location?.keyName ?? null;
 }

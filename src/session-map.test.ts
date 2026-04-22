@@ -238,7 +238,7 @@ describe("session-map", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       await resolveSessionLocation(SESSION_ID);
-      await resolveSessionLocation(SESSION_ID); // second call — no rescan (no cache hit, but warn dedup fires)
+      await resolveSessionLocation(SESSION_ID); // second call — rescans (negative result not cached); warn dedup suppresses the duplicate warning
       await resolveSessionLocation(SESSION_ID); // third call
 
       // Warning fired for first unmatched call only
