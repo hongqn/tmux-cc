@@ -6,7 +6,9 @@ import {
   extractSteeringText,
   extractUnstreamedFinalText,
   stripBootstrapWarnings,
+  transcriptContainsUserText,
 } from "./stream-fn.js";
+import type { TranscriptEntry } from "./types.js";
 
 describe("stream-fn", () => {
   describe("deriveSessionKey", () => {
@@ -416,6 +418,41 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
     it("keeps final text when progressive text does not match the final response prefix", () => {
       expect(extractUnstreamedFinalText("final answer", ["tool progress"])).toBe("final answer");
+    });
+  });
+
+  describe("transcriptContainsUserText", () => {
+    it("matches the accepted user turn exactly", () => {
+      const entries: TranscriptEntry[] = [
+        { type: "user", message: { content: [{ type: "text", text: "cron payload" }] }, sessionId: "s1" },
+      ];
+
+      expect(transcriptContainsUserText(entries, "cron payload")).toBe(true);
+    });
+
+    it("matches when an adapter appends a suffix to the submitted text", () => {
+      const entries: TranscriptEntry[] = [
+        {
+          type: "user",
+          message: { content: [{ type: "text", text: "cron payload\n\nkeep this session open" }] },
+          sessionId: "s1",
+        },
+      ];
+
+      expect(transcriptContainsUserText(entries, "cron payload")).toBe(true);
+    });
+
+    it("does not match assistant-only activity", () => {
+      const entries: TranscriptEntry[] = [
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "cron payload" }] },
+          sessionId: "s1",
+          stop_reason: "end_turn",
+        },
+      ];
+
+      expect(transcriptContainsUserText(entries, "cron payload")).toBe(false);
     });
   });
 });
