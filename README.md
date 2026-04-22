@@ -26,7 +26,13 @@ Each OpenClaw conversation session maps to a dedicated tmux window running a Cla
 
 ## Installation
 
-The plugin is bundled with OpenClaw. Enable it in your config:
+Clone or copy this plugin into your OpenClaw extensions directory:
+
+```bash
+git clone https://github.com/hongqn/tmux-cc ~/.openclaw/extensions/tmux-cc
+```
+
+Then enable the plugin:
 
 ```bash
 openclaw config set plugins.tmux-cc.enabled true
@@ -40,7 +46,7 @@ All settings are optional. Configure via `openclaw config set`:
 | --------------------------------------- | ----------------- | -------------------------------------------- |
 | `plugins.tmux-cc.workingDirectory`  | `process.cwd()`   | Working directory for Claude Code sessions   |
 | `plugins.tmux-cc.claudeCommand`     | `claude`          | Path to Claude Code CLI executable           |
-| `plugins.tmux-cc.tmuxSession`       | `openclaw-claude` | Name of the tmux session to use              |
+| `plugins.tmux-cc.tmuxSession`       | `openclaw-cc` | Name of the tmux session to use              |
 | `plugins.tmux-cc.pollingIntervalMs` | `1000`            | Polling interval for transcript reading (ms) |
 | `plugins.tmux-cc.responseTimeoutMs` | `300000`          | Max time to wait for a response (ms)         |
 | `plugins.tmux-cc.idleTimeoutMs`     | `1800000`         | Idle timeout before session cleanup (ms)     |
@@ -92,13 +98,13 @@ The MCP server is configured automatically in `.claude/settings.json` in the wor
 
 ```bash
 # List tmux windows
-tmux list-windows -t openclaw-claude
+tmux list-windows -t openclaw-cc
 
 # Attach to a session to observe
-tmux attach -t openclaw-claude
+tmux attach -t openclaw-cc
 
 # Select a specific window
-tmux select-window -t openclaw-claude:<window-name>
+tmux select-window -t openclaw-cc:<window-name>
 ```
 
 ## Image Support
@@ -109,13 +115,13 @@ Images sent via messaging channels are saved to `.openclaw-images/` in the worki
 
 ### Claude Code not responding
 
-1. Check tmux session exists: `tmux has-session -t openclaw-claude`
-2. Attach and check for errors: `tmux attach -t openclaw-claude`
+1. Check tmux session exists: `tmux has-session -t openclaw-cc`
+2. Attach and check for errors: `tmux attach -t openclaw-cc`
 3. Verify Claude Code is authenticated: run `claude` manually
 
 ### Permission prompts blocking
 
-The plugin uses `--permission-mode bypassPermissions` flag. If you see permission prompts, ensure Claude Code CLI supports this flag (requires recent version).
+The plugin uses `--dangerously-skip-permissions` flag. If you see permission prompts, ensure Claude Code CLI supports this flag (requires recent version).
 
 ### Transcript not found
 
@@ -125,7 +131,6 @@ Claude Code writes transcripts to `~/.claude/projects/<encoded-cwd>/`. Verify th
 
 ```bash
 # Run tests
-cd extensions/tmux-cc
 npx vitest run
 
 # Run with verbose output
