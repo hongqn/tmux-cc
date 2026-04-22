@@ -60,6 +60,12 @@
         "type": "string",
         "description": "Default Claude model to use",
         "default": "sonnet-4.6"
+      },
+      "kpssSessionWhitelist": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Session key glob patterns that keep Copilot CLI sessions alive (KPSS). Sessions not matching any pattern fall back to Claude Code.",
+        "default": ["*main"]
       }
     }
   }

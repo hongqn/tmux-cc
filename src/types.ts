@@ -18,6 +18,14 @@ export interface TmuxClaudeConfig {
   idleTimeoutMs?: number;
   /** Default Claude model to use (e.g., "sonnet-4.6"). */
   defaultModel?: string;
+  /**
+   * Session key glob patterns for which KPSS (keep-persistent-session) is
+   * enabled on the Copilot CLI adapter. Only sessions whose key matches at
+   * least one pattern are kept alive between turns; all others fall back to
+   * Claude Code.  Uses micromatch glob syntax (e.g., `"*main"`, `"*chat*"`).
+   * Default: `["*main"]`.
+   */
+  kpssSessionWhitelist?: string[];
 }
 
 export const DEFAULT_CONFIG: Required<TmuxClaudeConfig> = {

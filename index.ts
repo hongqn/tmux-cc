@@ -182,11 +182,13 @@ export default definePluginEntry({
 
     // Register Copilot CLI adapter (tmux-copilot provider)
     try {
+      const pluginConfig = getPluginConfig(api.config as unknown as Record<string, unknown>);
       const copilotAdapter = new CopilotCliAdapter({
         pluginDir,
         // Only enable KPSS (keep-persistent-session) for interactive chat sessions.
         // Cron, subagent, and other one-shot sessions should not be kept alive.
-        kpssSessionWhitelist: ["*telegram*", "*main"],
+        // Configurable via plugins.tmux-cc.kpssSessionWhitelist (default: ["*main"]).
+        kpssSessionWhitelist: pluginConfig.kpssSessionWhitelist ?? ["*main"],
         // Non-whitelisted sessions (cron, subagent) fall back to Claude Code.
         kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
         // When Copilot hits Anthropic rate limits, fall back to Claude Code
