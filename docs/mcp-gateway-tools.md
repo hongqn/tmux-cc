@@ -2,36 +2,36 @@
 
 ## Overview
 
-`src/mcp-server.ts` implements an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the OpenClaw gateway's system tools to Claude Code. It **dynamically discovers** all available tools from the installed OpenClaw package at startup REDACTED no hardcoded tool definitions.
+`src/mcp-server.ts` implements an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the OpenClaw gateway's system tools to Claude Code. It **dynamically discovers** all available tools from the installed OpenClaw package at startup — no hardcoded tool definitions.
 
-This gives Claude Code the ability to send messages, manage cron jobs, spawn sessions, check system status, and more REDACTED all the capabilities that the gateway normally provides to its native agents. When OpenClaw is upgraded or plugins add new tools, they are automatically available without any tmux-cc changes.
+This gives Claude Code the ability to send messages, manage cron jobs, spawn sessions, check system status, and more — all the capabilities that the gateway normally provides to its native agents. When OpenClaw is upgraded or plugins add new tools, they are automatically available without any tmux-cc changes.
 
 ## Architecture
 
 ```
-REDACTED
-REDACTED           Claude Code               REDACTED
-REDACTED  (running in tmux window)           REDACTED
-REDACTED                                     REDACTED
-REDACTED  Discovers MCP server via           REDACTED
-REDACTED  .claude/settings.json              REDACTED
-REDACTED         REDACTED                           REDACTED
-REDACTED         REDACTED stdio (JSON-RPC)          REDACTED
-REDACTED         REDACTED                           REDACTED
-REDACTED  REDACTED                   REDACTED
-REDACTED  REDACTED mcp-server.tsREDACTED (subprocess)      REDACTED
-REDACTED  REDACTED gateway-toolsREDACTED                   REDACTED
-REDACTED  REDACTED                   REDACTED
-REDACTED         REDACTED                           REDACTED
-REDACTED
-          REDACTED CJS subprocess: node -e
-          REDACTED REDACTED createOpenClawTools()
-          REDACTED
-REDACTED
-REDACTED   OpenClaw Runtime (CJS modules)    REDACTED
-REDACTED   createOpenClawTools() REDACTED 18 tools  REDACTED
-REDACTED   tool.execute(id, args)            REDACTED
-REDACTED
+┌─────────────────────────────────────┐
+│           Claude Code               │
+│  (running in tmux window)           │
+│                                     │
+│  Discovers MCP server via           │
+│  .claude/settings.json              │
+│         │                           │
+│         │ stdio (JSON-RPC)          │
+│         ▼                           │
+│  ┌──────────────┐                   │
+│  │ mcp-server.ts│ (subprocess)      │
+│  │ gateway-tools│                   │
+│  └──────┬───────┘                   │
+│         │                           │
+└─────────┼───────────────────────────┘
+          │ CJS subprocess: node -e
+          │ → createOpenClawTools()
+          ▼
+┌─────────────────────────────────────┐
+│   OpenClaw Runtime (CJS modules)    │
+│   createOpenClawTools() → 18 tools  │
+│   tool.execute(id, args)            │
+└─────────────────────────────────────┘
 ```
 
 ### How It Gets Configured
@@ -123,8 +123,8 @@ The MCP server file (`mcp-server.ts`) uses ESM imports for the MCP SDK, but tool
 
 ```
 1. ClaudeCodeAdapter.setupWorkspace() writes .claude/settings.json
-2. Claude Code starts REDACTED reads settings.json REDACTED launches mcp-server.ts via npx tsx
-3. mcp-server.ts spawns CJS subprocess REDACTED discovers 18 tools
+2. Claude Code starts → reads settings.json → launches mcp-server.ts via npx tsx
+3. mcp-server.ts spawns CJS subprocess → discovers 18 tools
 4. Registers ListTools + CallTool handlers with MCP Server
 5. Connects via StdioServerTransport
 6. Claude Code discovers tools and can call them during conversations

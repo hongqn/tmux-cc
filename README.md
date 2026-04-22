@@ -7,11 +7,11 @@ Instead of calling Anthropic's API directly, this plugin sends user messages to 
 ## How It Works
 
 ```
-User REDACTED Telegram/Discord/etc. REDACTED OpenClaw Gateway
-  REDACTED tmux send-keys (message text)
-  REDACTED Claude Code CLI (in tmux window)
-  REDACTED JSONL transcript polling
-  REDACTED response back to user
+User → Telegram/Discord/etc. → OpenClaw Gateway
+  → tmux send-keys (message text)
+  → Claude Code CLI (in tmux window)
+  → JSONL transcript polling
+  → response back to user
 ```
 
 Each OpenClaw conversation session maps to a dedicated tmux window running a Claude Code instance. Sessions are reused across messages in the same conversation and cleaned up after idle timeout.
@@ -69,7 +69,7 @@ openclaw config set models.default tmux-cc/sonnet-4.6
 
 Claude Code manages its own context. Place a `CLAUDE.md` (or `AGENTS.md`) file in the configured `workingDirectory` to provide instructions. Claude Code loads these files automatically.
 
-OpenClaw's system prompt is **not** injected REDACTED Claude Code handles all context assembly.
+OpenClaw's system prompt is **not** injected — Claude Code handles all context assembly.
 
 ## MCP Tools Bridge
 

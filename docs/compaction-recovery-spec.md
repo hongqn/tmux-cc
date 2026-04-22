@@ -1,4 +1,4 @@
-# Copilot CLI Compaction Recovery REDACTED Spec
+# Copilot CLI Compaction Recovery — Spec
 
 ## Problem
 
@@ -8,7 +8,7 @@ Compaction summarizes earlier messages and replaces them with a shorter
 task and begins **re-doing work that was already completed**.
 
 Compaction happens **mid-interaction** (between the agent's sub-turns within a
-single user request), so the agent cannot be notified synchronously REDACTED by the
+single user request), so the agent cannot be notified synchronously — by the
 time we detect it in `events.jsonl`, the agent is already continuing to process
 based on the summarized context.
 
@@ -23,7 +23,7 @@ When Copilot CLI compacts mid-turn, inject a short steering message on the
 acting, preventing repeated work.
 
 - Only applies to **Copilot CLI** sessions. Claude Code is out of scope.
-- **No config toggle** REDACTED always on.
+- **No config toggle** — always on.
 - Implementation mirrors KSSP suffix: a conditional prefix on the user's next
   message.
 
@@ -59,7 +59,7 @@ inject on next user message), we pick **C** because:
 - **A** is infeasible: Copilot CLI's TUI discards `sendKeys` while the agent
   is processing.
 - **B** requires polling-loop interception, re-entry, and decisions about
-  which response to emit REDACTED too much state-machine weight for the value.
+  which response to emit — too much state-machine weight for the value.
 - **C** reuses the existing "append suffix to user text" path (mirrors KSSP).
   Failure mode: the current in-flight response may be imperfect; user's next
   message (whatever it is) arrives with the guidance attached and re-orients

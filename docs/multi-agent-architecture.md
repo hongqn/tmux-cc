@@ -1,7 +1,7 @@
 # Multi-Agent Architecture Plan
 
 > Goal: Introduce an abstraction layer so tmux-cc can drive **any** interactive CLI
-> agent in tmux REDACTED not just Claude Code. Target agents: **Copilot CLI**, **Codex**,
+> agent in tmux — not just Claude Code. Target agents: **Copilot CLI**, **Codex**,
 > and future CLI tools.
 
 ## Current State
@@ -10,54 +10,54 @@ Today every source file is wired directly to Claude Code conventions:
 
 | Layer | Claude-Code Coupling |
 |-------|---------------------|
-| `tmux-manager.ts` | REDACTED Generic REDACTED pure tmux operations |
-| `session-persistence.ts` | REDACTED Generic REDACTED keyREDACTEDID JSON store |
-| `session-map.ts` | �REDACTED CC-specific: `/model` command, `REDACTED` prompt, `esc to int` status |
-| `transcript-reader.ts` | �REDACTED CC-specific: `~/.claude/projects/` path encoding, JSONL schema |
-| `stream-fn.ts` | �REDACTED CC-specific: polling loop hardcodes transcript parsing, completion detection |
-| `types.ts` | �REDACTED CC-specific: `TranscriptEntry` schema with thinking/tool_use blocks |
-| `index.ts` | �REDACTED CC-specific: workspace setup (CLAUDE.md, `.claude/` dir, MCP settings) |
+| `tmux-manager.ts` | ✅ Generic — pure tmux operations |
+| `session-persistence.ts` | ✅ Generic — key↔ID JSON store |
+| `session-map.ts` | 🟡 CC-specific: `/model` command, `❯` prompt, `esc to int` status |
+| `transcript-reader.ts` | 🔴 CC-specific: `~/.claude/projects/` path encoding, JSONL schema |
+| `stream-fn.ts` | 🔴 CC-specific: polling loop hardcodes transcript parsing, completion detection |
+| `types.ts` | 🔴 CC-specific: `TranscriptEntry` schema with thinking/tool_use blocks |
+| `index.ts` | 🔴 CC-specific: workspace setup (CLAUDE.md, `.claude/` dir, MCP settings) |
 
 ## Target Architecture
 
 ```
-REDACTED
-REDACTED  index.ts  (plugin entry point)                         REDACTED
-REDACTED  REDACTED Registers providers per agent (tmux-cc, tmux-copilot)REDACTED
-REDACTED  REDACTED Resolves agent adapter by provider/model             REDACTED
-REDACTED
-                 REDACTED
-                 REDACTED
-REDACTED
-REDACTED  stream-fn.ts  (agent-agnostic orchestrator)            REDACTED
-REDACTED  REDACTED Extracts user messages from OpenClaw context         REDACTED
-REDACTED  REDACTED Manages streaming event lifecycle                    REDACTED
-REDACTED  REDACTED Delegates agent-specific work to AgentAdapter        REDACTED
-REDACTED
-                 REDACTED uses AgentAdapter interface
-                 REDACTED
-REDACTED
-REDACTED              AgentAdapter (interface)                    REDACTED
-REDACTED                                                         REDACTED
-REDACTED  launch / resume / sendMessage                          REDACTED
-REDACTED  discoverTranscript / readEntries / isComplete          REDACTED
-REDACTED  isReady / isProcessing / switchModel                   REDACTED
-REDACTED  setupWorkspace                                         REDACTED
-REDACTED
-        REDACTED              REDACTED              REDACTED
-        REDACTED              REDACTED              REDACTED
-REDACTED REDACTED REDACTED
-REDACTED claude-code/ REDACTED REDACTED copilot/  REDACTED REDACTED codex/    REDACTED
-REDACTED  adapter.ts  REDACTED REDACTED adapter.tsREDACTED REDACTED adapter.tsREDACTED
-REDACTED  types.ts    REDACTED REDACTED types.ts  REDACTED REDACTED types.ts  REDACTED
-REDACTED  workspace.tsREDACTED REDACTED           REDACTED REDACTED           REDACTED
-REDACTED REDACTED REDACTED
-        REDACTED
-        REDACTED
-REDACTED
-REDACTED  Shared infrastructure (unchanged)                      REDACTED
-REDACTED  tmux-manager.ts REDACTED session-map.ts REDACTED session-persistence REDACTED
-REDACTED
+┌─────────────────────────────────────────────────────────┐
+│  index.ts  (plugin entry point)                         │
+│  • Registers providers per agent (tmux-cc, tmux-copilot)│
+│  • Resolves agent adapter by provider/model             │
+└────────────────┬────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────┐
+│  stream-fn.ts  (agent-agnostic orchestrator)            │
+│  • Extracts user messages from OpenClaw context         │
+│  • Manages streaming event lifecycle                    │
+│  • Delegates agent-specific work to AgentAdapter        │
+└────────────────┬────────────────────────────────────────┘
+                 │ uses AgentAdapter interface
+                 ▼
+┌─────────────────────────────────────────────────────────┐
+│              AgentAdapter (interface)                    │
+│                                                         │
+│  launch / resume / sendMessage                          │
+│  discoverTranscript / readEntries / isComplete          │
+│  isReady / isProcessing / switchModel                   │
+│  setupWorkspace                                         │
+└───────┬──────────────┬──────────────┬───────────────────┘
+        │              │              │
+        ▼              ▼              ▼
+┌──────────────┐ ┌───────────┐ ┌───────────┐
+│ claude-code/ │ │ copilot/  │ │ codex/    │
+│  adapter.ts  │ │ adapter.ts│ │ adapter.ts│
+│  types.ts    │ │ types.ts  │ │ types.ts  │
+│  workspace.ts│ │           │ │           │
+└──────────────┘ └───────────┘ └───────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────┐
+│  Shared infrastructure (unchanged)                      │
+│  tmux-manager.ts · session-map.ts · session-persistence │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## AgentAdapter Interface
@@ -67,7 +67,7 @@ interface AgentAdapter {
   /** Unique agent identifier, e.g. "claude-code", "copilot-cli", "codex" */
   readonly id: string;
 
-  // REDACTED Lifecycle REDACTED
+  // ── Lifecycle ────────────────────────────────────────
 
   /** Build the shell command to launch the agent in a tmux window. */
   buildLaunchCommand(opts: {
@@ -93,7 +93,7 @@ interface AgentAdapter {
    */
   setupWorkspace?(cwd: string, config: AgentConfig): Promise<void>;
 
-  // REDACTED Input REDACTED
+  // ── Input ────────────────────────────────────────────
 
   /**
    * Prepare text before sending to the agent.
@@ -111,7 +111,7 @@ interface AgentAdapter {
     newModel: string,
   ): Promise<boolean>;
 
-  // REDACTED Output / Transcript REDACTED
+  // ── Output / Transcript ──────────────────────────────
 
   /** Directory where the agent writes transcripts/logs for a given cwd. */
   transcriptDir(cwd: string): string;
@@ -142,7 +142,7 @@ interface AgentAdapter {
     stopReason?: string;
   };
 
-  // REDACTED TUI State REDACTED
+  // ── TUI State ────────────────────────────────────────
 
   /**
    * Check whether the agent is currently processing (thinking / running
@@ -156,7 +156,7 @@ interface AgentAdapter {
 }
 ```
 
-### AgentEntry REDACTED Generic Transcript Entry
+### AgentEntry — Generic Transcript Entry
 
 ```typescript
 interface AgentEntry {
@@ -182,18 +182,18 @@ type AgentContentBlock =
 | Aspect | Claude Code | Copilot CLI | Codex |
 |--------|------------|-----------|-------|
 | **Binary** | `claude` | `copilot-cli` | `codex` |
-| **Launch flags** | `--model X --permission-mode bypassPermissions` | TBD REDACTED likely `--model X` | TBD REDACTED likely `--model X` |
+| **Launch flags** | `--model X --permission-mode bypassPermissions` | TBD — likely `--model X` | TBD — likely `--model X` |
 | **Resume** | `--resume <sessionId>` | TBD | TBD |
-| **Transcript location** | `~/.claude/projects/<cwd>/` | TBD REDACTED may use stdout or different dir | TBD |
+| **Transcript location** | `~/.claude/projects/<cwd>/` | TBD — may use stdout or different dir | TBD |
 | **Transcript format** | JSONL with `type`, `message`, `stop_reason` | TBD | TBD |
 | **Thinking blocks** | Explicit `{type: "thinking"}` | Likely absent | Likely absent |
-| **Completion signal** | `stop_reason: "end_turn"` or `turn_duration` system entry | TBD REDACTED maybe exit or prompt | TBD |
-| **Ready prompt** | `REDACTED` (U+276F) after permission prompts | TBD | TBD |
+| **Completion signal** | `stop_reason: "end_turn"` or `turn_duration` system entry | TBD — maybe exit or prompt | TBD |
+| **Ready prompt** | `❯` (U+276F) after permission prompts | TBD | TBD |
 | **Processing indicator** | `esc to int` in pane content | TBD | TBD |
-| **Model switching** | `/model <name>` REPL command | TBD REDACTED maybe not supported | TBD |
+| **Model switching** | `/model <name>` REPL command | TBD — maybe not supported | TBD |
 | **MCP support** | Yes, via `.claude/settings.json` | TBD | TBD |
 
-> **Note**: Copilot CLI and Codex details are TBD REDACTED will be filled in once we
+> **Note**: Copilot CLI and Codex details are TBD — will be filled in once we
 > investigate their actual CLI behaviour. The adapter pattern lets us add them
 > incrementally without touching the core orchestrator.
 
@@ -207,12 +207,12 @@ changing external behaviour. All existing tests must pass.
 1. Create `src/adapters/` directory structure:
    ```
    src/adapters/
-     types.ts              REDACTED AgentAdapter, AgentEntry, AgentContentBlock interfaces
+     types.ts              ← AgentAdapter, AgentEntry, AgentContentBlock interfaces
      claude-code/
-       adapter.ts          REDACTED ClaudeCodeAdapter implements AgentAdapter
-       types.ts            REDACTED CC-specific TranscriptEntry, TranscriptContentBlock
-       transcript.ts       REDACTED Extracted from transcript-reader.ts (CC parsing logic)
-       workspace.ts        REDACTED Extracted from index.ts (CLAUDE.md, MCP settings)
+       adapter.ts          ← ClaudeCodeAdapter implements AgentAdapter
+       types.ts            ← CC-specific TranscriptEntry, TranscriptContentBlock
+       transcript.ts       ← Extracted from transcript-reader.ts (CC parsing logic)
+       workspace.ts        ← Extracted from index.ts (CLAUDE.md, MCP settings)
    ```
 
 2. Refactor `stream-fn.ts`:
@@ -260,8 +260,8 @@ changing external behaviour. All existing tests must pass.
 
 | Current File | Change |
 |-------------|--------|
-| `src/types.ts` | Extract CC types REDACTED `src/adapters/claude-code/types.ts`. Keep generic `AgentConfig` |
-| `src/transcript-reader.ts` | Split: generic JSONL utils stay, CC parsing REDACTED `adapters/claude-code/transcript.ts` |
+| `src/types.ts` | Extract CC types → `src/adapters/claude-code/types.ts`. Keep generic `AgentConfig` |
+| `src/transcript-reader.ts` | Split: generic JSONL utils stay, CC parsing → `adapters/claude-code/transcript.ts` |
 | `src/stream-fn.ts` | Accept `AgentAdapter` param; replace CC calls with adapter methods |
 | `src/session-map.ts` | Accept `AgentAdapter` for waitForReady/isProcessing/switchModel |
 | `src/tmux-manager.ts` | No change (already generic) |
@@ -278,7 +278,7 @@ changing external behaviour. All existing tests must pass.
 2. **Provider naming**: Current `tmux-cc/sonnet-4.6`. For Copilot, `tmux-copilot/gpt-5.4`?
    Or unified namespace like `tmux/cc-sonnet-4.6`, `tmux/copilot-gpt-5.4`?
 
-3. **Stdout-based agents**: Some CLI agents may not write transcript files REDACTED
+3. **Stdout-based agents**: Some CLI agents may not write transcript files —
    they stream to stdout. The adapter should support this mode (capture pane
    content instead of reading files).
 
