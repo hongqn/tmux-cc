@@ -306,8 +306,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         await sendTmuxKey(tmuxSession, windowName, "Down");
         await new Promise(resolve => setTimeout(resolve, 300));
         await sendTmuxKey(tmuxSession, windowName, "Enter");
-      } else if (content.includes("Do you want to make this edit")) {
-        console.log(`[claude-code] auto-dismissing edit permission prompt`);
+      } else if (content.includes("Do you want to ") && /(^|\n)\s*[❯>]?\s*1\.\s*Yes\b/.test(content)) {
+        const verb = content.match(/Do you want to [^\n?]*\??/)?.[0] ?? "Do you want to …?";
+        console.log(`[claude-code] auto-dismissing "Do you want to …" prompt: ${verb}`);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       } else if (content.includes("I trust this folder")) {
         console.log(`[claude-code] auto-dismissing trust prompt`);

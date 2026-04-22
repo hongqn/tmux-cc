@@ -1153,8 +1153,9 @@ async function pollForResponse(
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
                 await sleep(300);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-              } else if (content?.includes("Do you want to make this edit")) {
-                console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing edit permission prompt`);
+              } else if (content?.includes("Do you want to ") && /(^|\n)\s*[❯>]?\s*1\.\s*Yes\b/.test(content ?? "")) {
+                const verb = content?.match(/Do you want to [^\n?]*\??/)?.[0] ?? "Do you want to …?";
+                console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing "Do you want to …" prompt: ${verb}`);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
               } else if (content?.includes("I trust this folder")) {
                 console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
@@ -1275,8 +1276,9 @@ async function pollForResponse(
             await sendTmuxKey(config.tmuxSession, session.windowName, "Down");
             await sleep(300);
             await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
-          } else if (content?.includes("Do you want to make this edit")) {
-            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing edit permission prompt`);
+          } else if (content?.includes("Do you want to ") && /(^|\n)\s*[❯>]?\s*1\.\s*Yes\b/.test(content ?? "")) {
+            const verb = content?.match(/Do you want to [^\n?]*\??/)?.[0] ?? "Do you want to …?";
+            console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing "Do you want to …" prompt: ${verb}`);
             await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
           } else if (content?.includes("I trust this folder")) {
             console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing trust prompt`);
