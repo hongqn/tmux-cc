@@ -51,79 +51,140 @@ export function _setHasEverCreatedSession(value: boolean): void {
   hasEverCreatedSession = value;
 }
 
-/** Cache of gateway sessionId → agent ID. */
-const agentIdCache = new Map<string, string>();
+/** Resolved location of an openclaw session: which agent owns it and its key name. */
+export type SessionLocation = { agentId: string; keyName: string | null };
+
+/** Combined cache of gateway sessionId → resolved location. Only successful lookups are cached. */
+const sessionLocationCache = new Map<string, SessionLocation>();
+
+/** Tracks sessionIds for which a "not found" warning has already been emitted (per-process dedup). */
+const warnedSessionIds = new Set<string>();
+
+/** @internal Test-only: reset all module-level caches and dedup state. */
+export function __resetForTests(): void {
+  sessionLocationCache.clear();
+  warnedSessionIds.clear();
+}
 
 /**
- * Resolve the OpenClaw agent ID from a gateway session ID.
+ * Resolve both the OpenClaw agent ID and session key name from a gateway session ID
+ * in a single scan.
  *
- * Scans ~/.openclaw/agents/{agentId}/sessions/ for a JSONL file matching the
- * session UUID. The agent directory name is the agent ID (which typically
- * matches the channel account key, e.g., "myagent").
+ * Primary path: scans ~/.openclaw/agents/AGENT/sessions/sessions.json for the entry
+ * whose sessionId matches gatewaySessionId. This path works on the very first
+ * turn of a new session because the gateway writes sessions.json before invoking
+ * the plugin.
  *
- * Results are cached so the scan only runs once per session.
+ * Fallback (defence in depth): if no sessions.json entry matches, checks for the
+ * existence of a SESSIONID.jsonl transcript file. This covers the theoretical case
+ * where sessions.json is temporarily unavailable.
+ *
+ * When neither path resolves the session and gatewaySessionId is non-null, emits a
+ * one-time warning so log watchers can detect potential session splits.
+ *
+ * Results are cached so repeat calls for the same sessionId are O(1).
  */
-export async function resolveAgentId(gatewaySessionId: string | undefined): Promise<string | null> {
+export async function resolveSessionLocation(
+  gatewaySessionId: string | undefined,
+): Promise<SessionLocation | null> {
   if (!gatewaySessionId) return null;
-  const cached = agentIdCache.get(gatewaySessionId);
+
+  const cached = sessionLocationCache.get(gatewaySessionId);
   if (cached) return cached;
 
   const agentsDir = join(homedir(), ".openclaw", "agents");
+  let agentDirs: string[];
   try {
-    const entries = await readdir(agentsDir);
-    for (const agentDir of entries) {
-      const sessionFile = join(agentsDir, agentDir, "sessions", `${gatewaySessionId}.jsonl`);
-      try {
-        await stat(sessionFile);
-        agentIdCache.set(gatewaySessionId, agentDir);
-        console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} → ${agentDir}`);
-        return agentDir;
-      } catch {
-        // File doesn't exist in this agent dir
-      }
-    }
+    agentDirs = await readdir(agentsDir);
   } catch {
-    // agents dir doesn't exist
+    return null;
+  }
+
+  // Primary path: scan sessions.json for each agent.
+  // This is always correct on turn 1 because the gateway writes sessions.json
+  // before dispatching to the plugin.
+  for (const agentDir of agentDirs) {
+    const sessionsFile = join(agentsDir, agentDir, "sessions", "sessions.json");
+    try {
+      const data = JSON.parse(await readFile(sessionsFile, "utf-8"));
+      for (const [keyName, entry] of Object.entries(data)) {
+        if ((entry as { sessionId?: string }).sessionId === gatewaySessionId) {
+          const location: SessionLocation = { agentId: agentDir, keyName };
+          sessionLocationCache.set(gatewaySessionId, location);
+          console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} → ${agentDir}`);
+          console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} → ${keyName}`);
+          return location;
+        }
+      }
+    } catch {
+      // This agent's sessions.json is missing or malformed; try the next agent.
+    }
+  }
+
+  // Fallback: JSONL existence check (defence in depth for sessions.json lag).
+  for (const agentDir of agentDirs) {
+    const jsonlFile = join(agentsDir, agentDir, "sessions", `${gatewaySessionId}.jsonl`);
+    try {
+      await stat(jsonlFile);
+      // JSONL exists — re-check sessions.json for keyName (may have appeared by now).
+      let keyName: string | null = null;
+      const sessionsFile = join(agentsDir, agentDir, "sessions", "sessions.json");
+      try {
+        const data = JSON.parse(await readFile(sessionsFile, "utf-8"));
+        for (const [k, entry] of Object.entries(data)) {
+          if ((entry as { sessionId?: string }).sessionId === gatewaySessionId) {
+            keyName = k;
+            break;
+          }
+        }
+      } catch {
+        // sessions.json still unavailable; proceed with keyName=null.
+      }
+      const location: SessionLocation = { agentId: agentDir, keyName };
+      sessionLocationCache.set(gatewaySessionId, location);
+      console.log(`[tmux-cc] resolveAgentId: ${gatewaySessionId} → ${agentDir}`);
+      if (keyName) console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} → ${keyName}`);
+      return location;
+    } catch {
+      // JSONL doesn't exist in this agent dir; try the next.
+    }
+  }
+
+  // Both paths failed — warn once per sessionId to flag potential session split.
+  if (!warnedSessionIds.has(gatewaySessionId)) {
+    warnedSessionIds.add(gatewaySessionId);
+    console.warn(
+      `[tmux-cc] WARN: sessionId=${gatewaySessionId} not found in any agent's sessions.json — falling back to derived key (potential session split)`,
+    );
   }
   return null;
 }
 
-/** Cache of gateway sessionId → openclaw session key name (e.g. "agent:myagent:main"). */
-const sessionKeyNameCache = new Map<string, string>();
+/**
+ * Resolve the OpenClaw agent ID from a gateway session ID.
+ * @deprecated Prefer {@link resolveSessionLocation} for new call sites; this thin
+ * wrapper exists for backward compatibility.
+ */
+export async function resolveAgentId(gatewaySessionId: string | undefined): Promise<string | null> {
+  const location = await resolveSessionLocation(gatewaySessionId);
+  return location?.agentId ?? null;
+}
 
 /**
  * Resolve the OpenClaw session key name from a gateway session UUID.
- *
- * Looks up the agent's sessions.json to find the key (e.g., "agent:myagent:main",
- * "agent:myagent:telegram:slash:123") that maps to the given UUID.
- *
- * This key name is what the KPSS whitelist patterns (like "*chat*", "*main")
- * are designed to match against.
+ * @deprecated Prefer {@link resolveSessionLocation} for new call sites; this thin
+ * wrapper exists for backward compatibility.
  */
 export async function resolveSessionKeyName(
   gatewaySessionId: string | undefined,
   agentId: string | undefined,
 ): Promise<string | null> {
-  if (!gatewaySessionId || !agentId) return null;
-
-  const cacheKey = `${agentId}:${gatewaySessionId}`;
-  const cached = sessionKeyNameCache.get(cacheKey);
-  if (cached) return cached;
-
-  const sessionsFile = join(homedir(), ".openclaw", "agents", agentId, "sessions", "sessions.json");
-  try {
-    const data = JSON.parse(await readFile(sessionsFile, "utf-8"));
-    for (const [keyName, entry] of Object.entries(data)) {
-      if ((entry as { sessionId?: string }).sessionId === gatewaySessionId) {
-        sessionKeyNameCache.set(cacheKey, keyName);
-        console.log(`[tmux-cc] resolveSessionKeyName: ${gatewaySessionId} → ${keyName}`);
-        return keyName;
-      }
-    }
-  } catch {
-    // sessions.json doesn't exist or isn't readable
-  }
-  return null;
+  if (!gatewaySessionId) return null;
+  // agentId param is kept for API compatibility but is no longer needed; the
+  // combined resolver already returns the keyName in the same scan.
+  void agentId;
+  const location = await resolveSessionLocation(gatewaySessionId);
+  return location?.keyName ?? null;
 }
 
 /**

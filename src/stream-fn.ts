@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { deleteSession, getOrCreateSession, resolveAgentId, resolveSessionKeyName, restartSession, scheduleEagerCleanup } from "./session-map.js";
+import { deleteSession, getOrCreateSession, resolveSessionLocation, restartSession, scheduleEagerCleanup } from "./session-map.js";
 import { getStableSessionKey, persistSession, persistStableSessionKey } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -175,8 +175,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // new session UUID (eviction). User-initiated /new and /reset are
         // handled separately by the before_reset hook (see index.ts), which
         // explicitly tears down the window when intentional refresh is needed.
-        const agentAccountId = await resolveAgentId(sessionId);
-        const sessionKeyName = await resolveSessionKeyName(sessionId, agentAccountId ?? undefined);
+        const location = await resolveSessionLocation(sessionId);
+        const agentAccountId = location?.agentId ?? null;
+        const sessionKeyName = location?.keyName ?? null;
 
         // Recover a previously-used sessionKey so msg 1 (sessionKeyName race
         // — sessions.json not yet written) and msg 2 (sessionKeyName now
