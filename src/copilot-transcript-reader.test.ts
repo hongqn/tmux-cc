@@ -299,7 +299,7 @@ describe("copilot-transcript-reader", () => {
     });
 
     it("collects text from ALL assistant entries since the last user message", () => {
-      // This is the bug behind the "REDACTED" report: a multi-turn task emits
+      // This is the bug behind the multi-edit report: a multi-turn task emits
       // text fragments across several assistant.message events. Returning
       // only the last entry's text dropped everything in between, so the
       // user saw e.g. "modification 4" without "modification 1..3".
@@ -404,7 +404,7 @@ describe("copilot-transcript-reader", () => {
     });
 
     it("aggregates text across all sub-turns when the chain ends in ask_user", () => {
-      // Real-world "REDACTED" shape: agent emits prose fragments across many
+      // Real-world multi-edit shape: agent emits prose fragments across many
       // assistant.message events while making edits, then closes the turn
       // with ask_user. The full prose must be relayed (not just the last
       // fragment).
@@ -412,31 +412,31 @@ describe("copilot-transcript-reader", () => {
         { type: "user", message: { content: [{ type: "text", text: "do edits" }] }, sessionId: "s1" },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "**REDACTED1** done" }] },
+          message: { content: [{ type: "text", text: "**edit 1** done" }] },
           sessionId: "s1",
           stop_reason: "tool_use",
         },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "**REDACTED2** done" }] },
+          message: { content: [{ type: "text", text: "**edit 2** done" }] },
           sessionId: "s1",
           stop_reason: "tool_use",
         },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "**REDACTED3** done" }] },
+          message: { content: [{ type: "text", text: "**edit 3** done" }] },
           sessionId: "s1",
           stop_reason: "tool_use",
         },
         {
           type: "assistant",
-          message: { content: [{ type: "text", text: "REDACTED\n\nMore?" }] },
+          message: { content: [{ type: "text", text: "All done.\n\nMore?" }] },
           sessionId: "s1",
           stop_reason: "ask_user",
         },
       ];
       const result = extractAssistantResponse(entries);
-      expect(result.text).toBe("**REDACTED1** done\n**REDACTED2** done\n**REDACTED3** done\nREDACTED\n\nMore?");
+      expect(result.text).toBe("**edit 1** done\n**edit 2** done\n**edit 3** done\nAll done.\n\nMore?");
       expect(result.isComplete).toBe(true);
     });
   });

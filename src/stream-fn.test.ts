@@ -315,7 +315,7 @@ describe("stream-fn", () => {
 
   describe("stripBootstrapWarnings", () => {
     it("strips bootstrap truncation warning from text", () => {
-      const text = `REDACTED REDACTED REDACTED
+      const text = `Should I buy more today?
 [Bootstrap truncation warning]
 Some workspace bootstrap files were truncated before injection.
 Treat Project Context as partial and read the relevant files directly if details seem
@@ -325,7 +325,7 @@ missing.
 agents.defaults.bootstrapTotalMaxChars.`;
 
       const result = stripBootstrapWarnings(text);
-      expect(result).toBe("REDACTED REDACTED REDACTED");
+      expect(result).toBe("Should I buy more today?");
     });
 
     it("returns text unchanged when no warning present", () => {
@@ -399,7 +399,7 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
   describe("extractUnstreamedFinalText", () => {
     it("drops final text that was already emitted as a progressive text block", () => {
-      const productionSample = "REDACTEDÔREDACTED\n\n**REDACTEDÔREDACTED**\n- AREDACTEDÔREDACTEDLinear REDACTEDÔREDACTEDREDACTEDÔREDACTED2REDACTED REDACTED REDACTEDREDACTED REDACTEDREDACTED REDACTED\n- BREDACTEDÔREDACTEDREDACTED REDACTED REDACTED REDACTED 50% REDACTED\n- REDACTED";
+      const productionSample = "Notification sent, timestamp updated.\n\n**Email summary:**\n- Category A: task assignments, service notifications, security updates\n- Category B: promotional offers\n- No billing emails";
 
       expect(extractUnstreamedFinalText(productionSample, [productionSample])).toBe("");
     });

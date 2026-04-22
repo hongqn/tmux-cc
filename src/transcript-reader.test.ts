@@ -499,12 +499,12 @@ describe("transcript-reader", () => {
       const entries: TranscriptEntry[] = [
         {
           type: "user",
-          message: { content: [{ type: "text" as const, text: "Add REDACTED characters" }] },
+          message: { content: [{ type: "text" as const, text: "Add new characters" }] },
           sessionId: "s1",
         },
         {
           type: "assistant",
-          message: { content: [{ type: "text" as const, text: "REDACTED" }] },
+          message: { content: [{ type: "text" as const, text: "Added the new entries" }] },
           sessionId: "s1",
           stop_reason: "tool_use",
         },
@@ -518,7 +518,7 @@ describe("transcript-reader", () => {
                 name: "AskUserQuestion",
                 input: {},
               },
-              { type: "text" as const, text: "\n\nREDACTEDÔREDACTED" },
+              { type: "text" as const, text: "\n\nAnything else to add?" },
             ],
           },
           sessionId: "s1",
@@ -529,8 +529,8 @@ describe("transcript-reader", () => {
       const response = extractAssistantResponse(entries);
       // Both the prose from earlier and the question from the ask_user entry
       // are relayed so the user sees the full context.
-      expect(response.text).toContain("REDACTED");
-      expect(response.text).toContain("REDACTEDÔREDACTED");
+      expect(response.text).toContain("Added the new entries");
+      expect(response.text).toContain("Anything else to add?");
       expect(response.isComplete).toBe(true);
     });
 
