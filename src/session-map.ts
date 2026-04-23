@@ -706,3 +706,29 @@ export function getSessionCount(): number {
 export function getSessionKeys(): string[] {
   return Array.from(sessions.keys());
 }
+
+/**
+ * sessionKeyName whose runs are independent: each invocation is a fresh task
+ * with no memory carryover (e.g. cron jobs, Telegram /btw side questions).
+ *
+ * For these kinds, reusing the same tmux window + persisted Claude Code
+ * session causes the on-disk transcript JSONL to grow unbounded across runs.
+ * Eventually CC's `--resume` (which reads the whole file to rebuild state and
+ * may auto-compact) exceeds the gateway's per-call timeout and the run aborts.
+ *
+ * Callers should skip the sessionKeyName-keyed entries in the stable-key
+ * recovery map for these kinds, so each invocation gets a fresh tmux window
+ * and a fresh CC session. Persisting under sessionId is still safe and useful
+ * because retries inside one cron run share a sessionId.
+ *
+ * Returns false for null/undefined/empty so callers can pass `name ?? null`.
+ */
+export function isEphemeralSessionKeyName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const s = name.split(":");
+  // Expected shape: agent:<agent>:<kind>[:<sub>[:<arg>...]]
+  if (s.length < 3) return false;
+  if (s[2] === "cron") return true;
+  if (s[2] === "telegram" && s[3] === "btw") return true;
+  return false;
+}

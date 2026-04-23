@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSession, resolveSessionLocation, __resetForTests } from "./session-map.js";
+import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSession, resolveSessionLocation, __resetForTests, isEphemeralSessionKeyName } from "./session-map.js";
 import * as tmuxManager from "./tmux-manager.js";
 import * as fsPromises from "node:fs/promises";
 
@@ -253,6 +253,56 @@ describe("session-map", () => {
       await resolveSessionLocation(undefined);
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  describe("isEphemeralSessionKeyName", () => {
+    it("returns true for cron sessionKeyName", () => {
+      expect(isEphemeralSessionKeyName("agent:main:cron:39c55720-766f-45e0-b3ef-a77bbc653a03")).toBe(true);
+    });
+
+    it("returns true for any agent's cron sessionKeyName", () => {
+      expect(isEphemeralSessionKeyName("agent:horo:cron:job-abc")).toBe(true);
+    });
+
+    it("returns true for telegram /btw sessionKeyName", () => {
+      expect(isEphemeralSessionKeyName("agent:horo:telegram:btw:12345")).toBe(true);
+    });
+
+    it("returns false for main conversation", () => {
+      expect(isEphemeralSessionKeyName("agent:main:main")).toBe(false);
+    });
+
+    it("returns false for telegram chat", () => {
+      expect(isEphemeralSessionKeyName("agent:horo:telegram:chat:-100123456")).toBe(false);
+    });
+
+    it("returns false for telegram slash", () => {
+      expect(isEphemeralSessionKeyName("agent:horo:telegram:slash:67890")).toBe(false);
+    });
+
+    it("returns false for null", () => {
+      expect(isEphemeralSessionKeyName(null)).toBe(false);
+    });
+
+    it("returns false for undefined", () => {
+      expect(isEphemeralSessionKeyName(undefined)).toBe(false);
+    });
+
+    it("returns false for empty string", () => {
+      expect(isEphemeralSessionKeyName("")).toBe(false);
+    });
+
+    it("returns false for malformed (no colons)", () => {
+      expect(isEphemeralSessionKeyName("notavalidkey")).toBe(false);
+    });
+
+    it("returns false for too-short prefix (agent:foo)", () => {
+      expect(isEphemeralSessionKeyName("agent:foo")).toBe(false);
+    });
+
+    it("returns false for telegram without :btw: subkind", () => {
+      expect(isEphemeralSessionKeyName("agent:horo:telegram")).toBe(false);
     });
   });
 });
