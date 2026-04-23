@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
-import { deleteSession, getOrCreateSession, resolveSessionLocation, restartSession, scheduleEagerCleanup } from "./session-map.js";
+import { deleteSession, getOrCreateSession, resolveSessionLocation, restartSession, scheduleEagerCleanup, isEphemeralSessionKeyName } from "./session-map.js";
 import { getStableSessionKey, persistSession, persistStableSessionKey } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
 // Transcript-reader imports used as fallback when no adapter is provided
@@ -185,9 +185,18 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // first (covers gateway eviction where sessionId changes but the key
         // name stays the same), then sessionId (covers the first-message
         // race). Derive fresh only when no prior mapping exists.
+        //
+        // Ephemeral sessionKeyNames (cron jobs, Telegram /btw) intentionally
+        // SKIP the sessionKeyName-keyed lookup and the sessionKeyName-keyed
+        // persist. Each new run gets a fresh sessionKey and therefore a fresh
+        // CC --resume target, preventing the on-disk transcript JSONL from
+        // growing unbounded across runs. Retries inside one run still share
+        // the same sessionId, so the sessionId-keyed lookup keeps them on the
+        // same tmux window.
+        const ephemeral = isEphemeralSessionKeyName(sessionKeyName);
         let sessionKey: string | undefined;
         let sessionKeySource: string = "derived";
-        if (sessionKeyName) {
+        if (sessionKeyName && !ephemeral) {
           const recovered = getStableSessionKey(sessionKeyName);
           if (recovered) { sessionKey = recovered; sessionKeySource = "stable(sessionKeyName)"; }
         }
@@ -196,17 +205,19 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           if (recovered) { sessionKey = recovered; sessionKeySource = "stable(sessionId)"; }
         }
         if (!sessionKey) {
-          sessionKey = deriveSessionKey(context.messages, sessionKeyName ?? sessionId);
+          // For ephemeral runs, fall back to sessionId only — never sessionKeyName —
+          // so each invocation derives a fresh key when sessionId is also fresh.
+          const fallback = ephemeral ? sessionId : (sessionKeyName ?? sessionId);
+          sessionKey = deriveSessionKey(context.messages, fallback);
         }
 
-        // Persist the mapping under every identifier available so a later
-        // call — even one racing through the resolveSessionKeyName gap, or
-        // arriving post-eviction with a fresh sessionId — recovers the same
-        // sessionKey.
+        // Persist under sessionId always (covers same-run retries). Persist
+        // under sessionKeyName only for non-ephemeral kinds, so ephemeral runs
+        // don't pin themselves to the same sessionKey on the next invocation.
         if (sessionId) persistStableSessionKey(sessionId, sessionKey);
-        if (sessionKeyName) persistStableSessionKey(sessionKeyName, sessionKey);
+        if (sessionKeyName && !ephemeral) persistStableSessionKey(sessionKeyName, sessionKey);
 
-        console.log(`[tmux-cc] run: sessionKey=${sessionKey} (${sessionKeySource}), sessionKeyName=${sessionKeyName ?? "null"}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
+        console.log(`[tmux-cc] run: sessionKey=${sessionKey} (${sessionKeySource}), sessionKeyName=${sessionKeyName ?? "null"}, ephemeral=${ephemeral}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
 
         // Step 2: Extract new user message(s) from context
         const userText = extractNewUserMessages(context.messages);

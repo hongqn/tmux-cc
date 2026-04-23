@@ -8,6 +8,7 @@ import {
   stripBootstrapWarnings,
   transcriptContainsUserText,
 } from "./stream-fn.js";
+import { isEphemeralSessionKeyName } from "./session-map.js";
 import type { TranscriptEntry } from "./types.js";
 
 describe("stream-fn", () => {
@@ -453,6 +454,28 @@ agents.defaults.bootstrapTotalMaxChars.`;
       ];
 
       expect(transcriptContainsUserText(entries, "cron payload")).toBe(false);
+    });
+  });
+
+  describe("ephemeral sessionKeyName <-> deriveSessionKey integration", () => {
+    it("ephemeral helper agrees with documented kinds", () => {
+      expect(isEphemeralSessionKeyName("agent:main:cron:job-1")).toBe(true);
+      expect(isEphemeralSessionKeyName("agent:horo:telegram:btw:42")).toBe(true);
+      expect(isEphemeralSessionKeyName("agent:horo:telegram:chat:-100")).toBe(false);
+      expect(isEphemeralSessionKeyName("agent:main:main")).toBe(false);
+    });
+
+    it("deriveSessionKey with sessionId fallback is stable across calls (retry safety)", () => {
+      const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
+      const sessionId = "cron-run-uuid-abc";
+      const k1 = deriveSessionKey(messages, sessionId);
+      const k2 = deriveSessionKey(messages, sessionId);
+      expect(k1).toBe(k2);
+    });
+
+    it("deriveSessionKey with different sessionId fallback yields different keys (fresh-per-run)", () => {
+      const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
+      expect(deriveSessionKey(messages, "cron-run-1")).not.toBe(deriveSessionKey(messages, "cron-run-2"));
     });
   });
 });
