@@ -86,6 +86,12 @@ describe("tmux-manager", () => {
       expect(newWindowCmd).toContain("--dangerously-skip-permissions");
       expect(newWindowCmd).not.toContain("--permission-mode");
       expect(newWindowCmd).toContain("sonnet-4.6");
+      expect(newWindowCmd).toContain("--disallowedTools");
+      expect(newWindowCmd).toContain("AskUserQuestion");
+      expect(newWindowCmd).toContain("RemoteTrigger");
+      expect(newWindowCmd).toContain("CronCreate");
+      expect(newWindowCmd).toContain("CronDelete");
+      expect(newWindowCmd).toContain("CronList");
     });
 
     it("adds --resume flag when resumeSessionId is provided", async () => {

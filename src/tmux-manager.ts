@@ -81,13 +81,26 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
   const args = [
     opts.claudeCommand,
     "--dangerously-skip-permissions",
-    // Disable AskUserQuestion: CC is used here only for one-shot fallback
-    // tasks (rate-limit or non-whitelisted/cron routing), so there is no
-    // reason to let the agent pause on an interactive option selector.
-    // Avoiding the tool also avoids the routing complexity of sendKeys
-    // vs. the selector UI — plain sendKeys always works on text prompts.
+    // Disable several Claude Code built-in tools:
+    //
+    // - AskUserQuestion: CC is used here only for one-shot fallback tasks
+    //   (rate-limit or non-whitelisted/cron routing), so there is no reason
+    //   to let the agent pause on an interactive option selector.  Avoiding
+    //   the tool also avoids the routing complexity of sendKeys vs. the
+    //   selector UI — plain sendKeys always works on text prompts.
+    //
+    // - RemoteTrigger: manages scheduled remote agents via the claude.ai CCR
+    //   API (cloud-side cron).  Disabled to prevent agents from creating
+    //   cloud triggers that bypass openclaw's cron tool.
+    //
+    // - CronCreate / CronDelete / CronList: Claude Code 内置本地 cron 工具,
+    //   写入 .claude/scheduled_tasks.json.  同样绕过 openclaw cron, 一起禁用.
+    //
+    // Agents that need scheduled tasks must use mcp__gateway-tools__cron
+    // instead.  Note: ScheduleWakeup (/loop self-scheduling) is intentionally
+    // left enabled — it is unrelated to cron management.
     "--disallowedTools",
-    "AskUserQuestion",
+    "AskUserQuestion,RemoteTrigger,CronCreate,CronDelete,CronList",
     "--model",
     windowOpts.model,
   ];
