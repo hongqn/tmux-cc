@@ -23,8 +23,13 @@ import type {
 } from "@mariozechner/pi-ai";
 import type { AgentAdapter } from "./adapters/types.js";
 import { deleteSession, getOrCreateSession, resolveSessionLocation, restartSession, scheduleEagerCleanup, isEphemeralSessionKeyName } from "./session-map.js";
-import { getStableSessionKey, persistSession, persistStableSessionKey } from "./session-persistence.js";
+import { getStableSessionKey, persistSession, persistStableSessionKey, removePersistedSession, removeStableSessionKeysFor } from "./session-persistence.js";
 import { sendKeys, sendTmuxKey, capturePane, killWindow, readCrashLog } from "./tmux-manager.js";
+import {
+  buildRotationPrefix,
+  performRotationIfPending,
+  stashPendingRotation,
+} from "./rotation.js";
 // Transcript-reader imports used as fallback when no adapter is provided
 import {
   readNewEntries as trReadNewEntries,
@@ -194,6 +199,27 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // the same sessionId, so the sessionId-keyed lookup keeps them on the
         // same tmux window.
         const ephemeral = isEphemeralSessionKeyName(sessionKeyName);
+
+        // Step 1.5: Transparent CC session rotation.
+        // If a previous turn observed a CC auto-compact (see onNewEntries
+        // below), the compact summary was stashed under sessionKeyName.
+        // Consume it now, before the stable-key lookup, so the next steps
+        // derive a fresh sessionKey + tmux window + CC --session and the
+        // new on-disk JSONL stays small. The summary is prepended to the
+        // user's actual message (Step 3.6) so CC sees one coherent turn.
+        // Failure → caller falls back to fresh start (no memory) — see
+        // src/rotation.ts for the full design.
+        const rotationSummary = await performRotationIfPending(
+          sessionKeyName,
+          ephemeral,
+          {
+            getStableSessionKey,
+            deleteSession: (key) => deleteSession(key, runConfig),
+            removePersistedSession,
+            removeStableSessionKeysFor,
+          },
+        );
+
         let sessionKey: string | undefined;
         let sessionKeySource: string = "derived";
         if (sessionKeyName && !ephemeral) {
@@ -234,7 +260,15 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         // Step 3.5: Strip OpenClaw bootstrap warnings — Claude Code manages
         // its own context files (CLAUDE.md, MEMORY.md) directly.
-        const finalText = stripBootstrapWarnings(rawText);
+        let finalText = stripBootstrapWarnings(rawText);
+
+        // Step 3.6: If a CC compact summary was stashed last turn, prepend
+        // it so the fresh CC session inherits the prior context in a single
+        // user turn. See rotation flow above (Step 1.5) and src/rotation.ts.
+        if (rotationSummary) {
+          finalText = buildRotationPrefix(rotationSummary, finalText);
+          console.log(`[tmux-cc] rotation: prepended summary, finalText length=${finalText.length}`);
+        }
 
         // Step 4.2: Let the adapter reject or redirect sessions it shouldn't handle.
         // E.g., tmux-copilot redirects cron/subagent sessions to the Claude Code
@@ -375,6 +409,38 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const onNewEntries = (allEntries: TranscriptEntry[]) => {
           for (let i = lastProcessedEntryIdx; i < allEntries.length; i++) {
             const entry = allEntries[i];
+
+            // Detect CC auto-compact: stash the summary so the next turn
+            // can rotate to a fresh CC session (transparent to openclaw).
+            // See src/rotation.ts for the full design. Stashing — never
+            // pane-touching — happens here; rotation execution happens at
+            // the start of the next turn (Step 1.5 above).
+            if (
+              entry.isCompactSummary &&
+              entry.type === "user" &&
+              sessionKeyName &&
+              !ephemeral
+            ) {
+              const summary = entry.message.content
+                .filter((b): b is { type: "text"; text: string } =>
+                  b.type === "text" && typeof b.text === "string" && b.text.length > 0,
+                )
+                .map((b) => b.text)
+                .join("\n");
+              if (summary.trim()) {
+                console.log(
+                  `[tmux-cc] rotation: detected isCompactSummary, ` +
+                  `sessionKeyName=${sessionKeyName}, claudeSessionId=${session.claudeSessionId ?? "?"}, ` +
+                  `summaryLen=${summary.length}`,
+                );
+                stashPendingRotation(sessionKeyName, {
+                  summary,
+                  oldClaudeSessionId: session.claudeSessionId,
+                  detectedAt: Date.now(),
+                });
+              }
+            }
+
             if (entry.type !== "assistant") continue;
 
             // Only stream natural-language reasoning: real thinking content

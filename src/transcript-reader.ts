@@ -310,6 +310,14 @@ export function parseLine(line: string): TranscriptEntry | null {
       stop_reason: stopReason,
     };
 
+    // CC writes a single user entry with isCompactSummary===true after
+    // auto-compact (or user-issued /compact). Surface the flag so the
+    // rotation flow (src/rotation.ts) can stash the summary and rotate
+    // the CC session on the next turn.
+    if (type === "user" && parsed.isCompactSummary === true) {
+      entry.isCompactSummary = true;
+    }
+
     return entry;
   } catch {
     return null;

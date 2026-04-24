@@ -86,6 +86,14 @@ export interface TranscriptEntry {
   stop_reason?: "end_turn" | "max_tokens" | string;
   /** System entry subtype (e.g., "turn_duration"). */
   subtype?: string;
+  /**
+   * True for the special `type:"user"` entry CC writes when it auto-compacts
+   * (or the user runs `/compact`). The `message.content` (a string in CC's
+   * native shape, normalized to a single text block here) starts with CC's
+   * native continuation prefix and is used by the rotation flow to seed a
+   * fresh CC session — see src/rotation.ts.
+   */
+  isCompactSummary?: boolean;
 }
 
 export type TranscriptContentBlock =
