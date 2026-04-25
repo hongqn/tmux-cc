@@ -9,3 +9,11 @@ dist/
 AGENTS.md
 scripts/deploy.sh
 replacements.txt
+# OpenSpec / superpowers / per-agent skill scaffolding (local-only)
+.agent/
+.codex/
+.gemini/
+.github/prompts/
+.github/skills/
+openspec/
+docs/superpowers/
