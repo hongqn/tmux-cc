@@ -1,5 +1,8 @@
 import type { Message, UserMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deriveSessionKey,
   extractNewUserMessages,
@@ -7,9 +10,12 @@ import {
   extractUnstreamedFinalText,
   stripBootstrapWarnings,
   transcriptContainsUserText,
+  updateTranscriptPath,
 } from "./stream-fn.js";
 import { isEphemeralSessionKeyName } from "./session-map.js";
-import type { TranscriptEntry } from "./types.js";
+import { removePersistedSession } from "./session-persistence.js";
+import { getProjectDir } from "./transcript-reader.js";
+import type { SessionState, TranscriptEntry } from "./types.js";
 
 describe("stream-fn", () => {
   describe("deriveSessionKey", () => {
@@ -476,6 +482,99 @@ agents.defaults.bootstrapTotalMaxChars.`;
     it("deriveSessionKey with different sessionId fallback yields different keys (fresh-per-run)", () => {
       const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
       expect(deriveSessionKey(messages, "cron-run-1")).not.toBe(deriveSessionKey(messages, "cron-run-2"));
+    });
+  });
+
+  describe("updateTranscriptPath: spawn-with-resume fork (HQN-18)", () => {
+    let uniqueCwd: string;
+    let projectDir: string;
+    const sessionKey = `tmux-test-${randomUUID()}`;
+
+    beforeEach(() => {
+      uniqueCwd = `/tmp/tmux-test-resume-${randomUUID()}`;
+      projectDir = getProjectDir(uniqueCwd);
+      mkdirSync(projectDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      rmSync(projectDir, { recursive: true, force: true });
+      removePersistedSession(sessionKey, "claude-code");
+    });
+
+    function makeState(claudeSessionId: string, snapshot: Map<string, number>): SessionState {
+      return {
+        sessionKey,
+        windowName: "cc-test-window",
+        transcriptOffset: 0,
+        lastActivityMs: Date.now(),
+        model: "sonnet-4.6",
+        turnCount: 0,
+        existingTranscriptPaths: snapshot,
+        claudeSessionId,
+      };
+    }
+
+    it("prefers the brand-new <newId>.jsonl over the persisted <oldId>.jsonl after `claude --resume`", () => {
+      const oldId = "old-session-aaaaaaaaaaaa";
+      const newId = "new-session-bbbbbbbbbbbb";
+      const oldPath = join(projectDir, `${oldId}.jsonl`);
+      const newPath = join(projectDir, `${newId}.jsonl`);
+
+      writeFileSync(oldPath, "old content".repeat(100));
+      const snapshot = new Map<string, number>([[oldPath, 1100]]);
+
+      // Simulate the persistedId file growing slightly while CC re-reads it.
+      writeFileSync(oldPath, "old content".repeat(100) + "x");
+
+      // CC has now created its new fork file.
+      writeFileSync(newPath, "");
+
+      const state = makeState(oldId, snapshot);
+      updateTranscriptPath(state, uniqueCwd);
+
+      expect(state.transcriptPath).toBe(newPath);
+      expect(state.transcriptOffset).toBe(0);
+      expect(state.claudeSessionId).toBe(newId);
+      expect(state.existingTranscriptPaths).toBeUndefined();
+    });
+
+    it("waits (no transcriptPath set) when the resumed-session fork has not appeared yet", () => {
+      const oldId = "old-session-cccccccccccc";
+      const oldPath = join(projectDir, `${oldId}.jsonl`);
+      writeFileSync(oldPath, "old content");
+      const snapshot = new Map<string, number>([[oldPath, 11]]);
+
+      // CC re-reads <oldId>.jsonl and grows it slightly. No fork yet.
+      writeFileSync(oldPath, "old content + replay");
+
+      const state = makeState(oldId, snapshot);
+      updateTranscriptPath(state, uniqueCwd);
+
+      // Must NOT pick the stale <oldId>.jsonl as a placeholder.
+      expect(state.transcriptPath).toBeUndefined();
+      expect(state.claudeSessionId).toBe(oldId);
+      // Snapshot retained for the next poll to re-check.
+      expect(state.existingTranscriptPaths).toBe(snapshot);
+    });
+
+    it("uses claudeSessionId directly when no snapshot is set (post-discovery state)", () => {
+      const sid = "live-session-dddddddddddd";
+      const path = join(projectDir, `${sid}.jsonl`);
+      writeFileSync(path, "live content");
+
+      const state: SessionState = {
+        sessionKey,
+        windowName: "cc-test-window",
+        transcriptOffset: 0,
+        lastActivityMs: Date.now(),
+        model: "sonnet-4.6",
+        turnCount: 0,
+        claudeSessionId: sid,
+      };
+      updateTranscriptPath(state, uniqueCwd);
+
+      expect(state.transcriptPath).toBe(path);
+      expect(state.claudeSessionId).toBe(sid);
     });
   });
 });

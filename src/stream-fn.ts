@@ -1497,29 +1497,49 @@ async function pollForResponse(
  * Strategy 2 uses the snapshot's file size as the starting offset so we
  * skip old entries and only read new content.
  */
-function updateTranscriptPath(session: SessionState, workingDirectory: string, adapter?: AgentAdapter): void {
-  // Strategy 0: when we know the claudeSessionId (resuming a persisted
-  // session), look directly for <sessionId>.jsonl.
-  // up a transcript created by a *different* CC session that happens to
-  // share the same project directory.
-  if (session.claudeSessionId) {
+export function updateTranscriptPath(session: SessionState, workingDirectory: string, adapter?: AgentAdapter): void {
+  // Spawn-with-resume case (HQN-18 fix): both claudeSessionId AND a snapshot
+  // are present, meaning the gateway just spawned `claude --resume <id>`.
+  // CC reads <id>.jsonl as input but writes new turns to a brand-new
+  // <newId>.jsonl. Picking <id>.jsonl here would leave us polling a stale
+  // file forever and surface as "Claude Code session is unavailable" after
+  // the send-confirm retries exhaust. Prefer the new file; if it hasn't
+  // appeared yet, return without setting transcriptPath so the next poll
+  // can re-check.
+  if (session.claudeSessionId && session.existingTranscriptPaths) {
+    const newPath = adapter
+      ? adapter.findNewTranscript(workingDirectory, session.existingTranscriptPaths)
+      : trFindNew(workingDirectory, session.existingTranscriptPaths);
+    if (newPath) {
+      const newSessionId = adapter
+        ? adapter.extractSessionId(newPath)
+        : trExtractSessionId(newPath);
+      console.log(
+        `[tmux-cc] updateTranscriptPath: strategy 0r (resume fork) switching from ${session.claudeSessionId} to ${newSessionId ?? "?"} at ${newPath}`,
+      );
+      session.transcriptPath = newPath;
+      session.transcriptOffset = 0;
+      if (newSessionId) {
+        session.claudeSessionId = newSessionId;
+        persistSession(session.sessionKey, newSessionId, session.model, session.adapter?.id ?? "claude-code");
+      }
+      session.existingTranscriptPaths = undefined;
+      return;
+    }
+    // CC hasn't created the resumed-session jsonl yet. Wait for the next
+    // poll. Do NOT pick <id>.jsonl from snapshot — that's the stale source
+    // file; CC may grow it by a few bytes while replaying, which would
+    // fool strategy 2 (growing) into committing to the wrong file.
+    return;
+  } else if (session.claudeSessionId) {
+    // No snapshot (e.g. set after a successful send): trust claudeSessionId.
     const knownPath = adapter
       ? adapter.findTranscriptBySessionId(workingDirectory, session.claudeSessionId)
       : trFindBySessionId(workingDirectory, session.claudeSessionId);
     if (knownPath) {
-      const snapshotSize = session.existingTranscriptPaths?.get(knownPath);
-      if (snapshotSize != null) {
-        // Known file that existed before — use snapshot offset to skip old entries
-        console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, growing) found: ${knownPath}, snapshotSize=${snapshotSize}`);
-        session.transcriptPath = knownPath;
-        session.transcriptOffset = snapshotSize;
-      } else {
-        // File is brand new (not in snapshot) — read from start
-        console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId, new) found: ${knownPath}`);
-        session.transcriptPath = knownPath;
-        session.transcriptOffset = 0;
-      }
-      session.existingTranscriptPaths = undefined;
+      console.log(`[tmux-cc] updateTranscriptPath: strategy 0 (known sessionId) found: ${knownPath}`);
+      session.transcriptPath = knownPath;
+      session.transcriptOffset = 0;
       return;
     }
     // Session file doesn't exist yet — fall through to generic strategies
