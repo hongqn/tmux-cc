@@ -26,7 +26,8 @@ const SEND_KEYS_LITERAL_MAX_BYTES = 32 * 1024;
 
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
-const READY_TIMEOUT_MS = 30_000;
+// 120s allows for slow `claude --resume` startup on large (>500KB) transcripts.
+const READY_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_HEAP_MB = 1024;
 
 export interface TmuxManagerOptions {
