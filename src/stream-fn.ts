@@ -1048,9 +1048,15 @@ async function waitForUserTurnInTranscript(
   while (Date.now() < deadline) {
     if (isCancelled?.()) return null;
 
-    if (!session.transcriptPath) {
+    const prevPath = session.transcriptPath;
+    if (!session.transcriptPath || session.existingTranscriptPaths) {
+      // Re-call each iteration in the resume-fork-watch case (snapshot still
+      // set) so we can switch from a tentative <id>.jsonl to a fork the
+      // moment one appears.
       updateTranscriptPath(session, config.workingDirectory, adapter);
-      if (session.transcriptPath && baseOffset === 0) {
+      if (session.transcriptPath && session.transcriptPath !== prevPath) {
+        baseOffset = session.transcriptOffset;
+      } else if (session.transcriptPath && baseOffset === 0) {
         baseOffset = session.transcriptOffset;
       }
     }
@@ -1061,6 +1067,8 @@ async function waitForUserTurnInTranscript(
         : trReadNewEntries(session.transcriptPath, baseOffset);
       if (transcriptContainsUserText(result.entries, expectedText)) {
         console.log(`[tmux-cc] send confirm: user turn accepted in transcript`);
+        // Commit: stop fork-watching now that we've confirmed the right file.
+        session.existingTranscriptPaths = undefined;
         return { offsetBeforeTurn: baseOffset };
       }
     }
@@ -1498,24 +1506,26 @@ async function pollForResponse(
  * skip old entries and only read new content.
  */
 export function updateTranscriptPath(session: SessionState, workingDirectory: string, adapter?: AgentAdapter): void {
-  // Spawn-with-resume case (HQN-18 fix): both claudeSessionId AND a snapshot
-  // are present, meaning the gateway just spawned `claude --resume <id>`.
-  // CC reads <id>.jsonl as input but writes new turns to a brand-new
-  // <newId>.jsonl. Picking <id>.jsonl here would leave us polling a stale
-  // file forever and surface as "Claude Code session is unavailable" after
-  // the send-confirm retries exhaust. Prefer the new file; if it hasn't
-  // appeared yet, return without setting transcriptPath so the next poll
-  // can re-check.
+  // Spawn-with-resume case (HQN-18): both claudeSessionId AND a snapshot are
+  // present, meaning the gateway just spawned `claude --resume <id>`. CC has
+  // two observed behaviors:
+  //   (a) FORK: writes new turns to a brand-new <newId>.jsonl, leaving
+  //       <id>.jsonl untouched (or only growing slightly during -r replay).
+  //   (b) IN-PLACE: continues appending to <id>.jsonl directly.
+  // We can't tell which until CC writes. Strategy: pick the new file if it
+  // appears (case a); otherwise tentatively use <id>.jsonl with the snapshot
+  // offset (case b). Keep the snapshot so the caller can re-invoke us on the
+  // next poll and switch to a fork the moment it appears.
   if (session.claudeSessionId && session.existingTranscriptPaths) {
     const newPath = adapter
       ? adapter.findNewTranscript(workingDirectory, session.existingTranscriptPaths)
       : trFindNew(workingDirectory, session.existingTranscriptPaths);
-    if (newPath) {
+    if (newPath && newPath !== session.transcriptPath) {
       const newSessionId = adapter
         ? adapter.extractSessionId(newPath)
         : trExtractSessionId(newPath);
       console.log(
-        `[tmux-cc] updateTranscriptPath: strategy 0r (resume fork) switching from ${session.claudeSessionId} to ${newSessionId ?? "?"} at ${newPath}`,
+        `[tmux-cc] updateTranscriptPath: strategy 0r (resume fork) ${session.transcriptPath ? "switching" : "selecting"} from ${session.claudeSessionId} to ${newSessionId ?? "?"} at ${newPath}`,
       );
       session.transcriptPath = newPath;
       session.transcriptOffset = 0;
@@ -1526,10 +1536,29 @@ export function updateTranscriptPath(session: SessionState, workingDirectory: st
       session.existingTranscriptPaths = undefined;
       return;
     }
-    // CC hasn't created the resumed-session jsonl yet. Wait for the next
-    // poll. Do NOT pick <id>.jsonl from snapshot — that's the stale source
-    // file; CC may grow it by a few bytes while replaying, which would
-    // fool strategy 2 (growing) into committing to the wrong file.
+    if (newPath) {
+      // Already pointing at the fork from a previous call; nothing to do.
+      return;
+    }
+    if (session.transcriptPath) {
+      // Already tentatively pointing at <id>.jsonl; keep watching for a fork.
+      return;
+    }
+    // No fork yet — tentatively select <id>.jsonl with the snapshot offset.
+    // Snapshot is INTENTIONALLY retained so the next call can switch to a
+    // fork if one appears.
+    const knownPath = adapter
+      ? adapter.findTranscriptBySessionId(workingDirectory, session.claudeSessionId)
+      : trFindBySessionId(workingDirectory, session.claudeSessionId);
+    if (knownPath) {
+      const snapshotSize = session.existingTranscriptPaths.get(knownPath) ?? 0;
+      console.log(
+        `[tmux-cc] updateTranscriptPath: strategy 0r (resume in-place tentative) using ${knownPath}, snapshotSize=${snapshotSize} (snapshot retained for fork-watch)`,
+      );
+      session.transcriptPath = knownPath;
+      session.transcriptOffset = snapshotSize;
+      // Do NOT clear existingTranscriptPaths — keep watching for a fork.
+    }
     return;
   } else if (session.claudeSessionId) {
     // No snapshot (e.g. set after a successful send): trust claudeSessionId.

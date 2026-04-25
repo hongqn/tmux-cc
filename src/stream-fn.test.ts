@@ -538,7 +538,7 @@ agents.defaults.bootstrapTotalMaxChars.`;
       expect(state.existingTranscriptPaths).toBeUndefined();
     });
 
-    it("waits (no transcriptPath set) when the resumed-session fork has not appeared yet", () => {
+    it("tentatively uses <id>.jsonl with snapshot offset when no fork has appeared yet, KEEPING the snapshot", () => {
       const oldId = "old-session-cccccccccccc";
       const oldPath = join(projectDir, `${oldId}.jsonl`);
       writeFileSync(oldPath, "old content");
@@ -550,11 +550,39 @@ agents.defaults.bootstrapTotalMaxChars.`;
       const state = makeState(oldId, snapshot);
       updateTranscriptPath(state, uniqueCwd);
 
-      // Must NOT pick the stale <oldId>.jsonl as a placeholder.
-      expect(state.transcriptPath).toBeUndefined();
+      // Tentatively pick the persistedId file with snapshot offset.
+      expect(state.transcriptPath).toBe(oldPath);
+      expect(state.transcriptOffset).toBe(11);
       expect(state.claudeSessionId).toBe(oldId);
-      // Snapshot retained for the next poll to re-check.
+      // Snapshot MUST be retained so a fork can still be detected on the next call.
       expect(state.existingTranscriptPaths).toBe(snapshot);
+    });
+
+    it("switches from tentative <id>.jsonl to a fork that appears on a later call", () => {
+      const oldId = "old-session-eeeeeeeeeeee";
+      const newId = "new-session-ffffffffffff";
+      const oldPath = join(projectDir, `${oldId}.jsonl`);
+      const newPath = join(projectDir, `${newId}.jsonl`);
+
+      writeFileSync(oldPath, "old content");
+      const snapshot = new Map<string, number>([[oldPath, 11]]);
+
+      const state = makeState(oldId, snapshot);
+
+      // First call: no fork yet → tentative pick.
+      updateTranscriptPath(state, uniqueCwd);
+      expect(state.transcriptPath).toBe(oldPath);
+      expect(state.existingTranscriptPaths).toBe(snapshot);
+
+      // Fork appears.
+      writeFileSync(newPath, "");
+
+      // Second call: must switch.
+      updateTranscriptPath(state, uniqueCwd);
+      expect(state.transcriptPath).toBe(newPath);
+      expect(state.transcriptOffset).toBe(0);
+      expect(state.claudeSessionId).toBe(newId);
+      expect(state.existingTranscriptPaths).toBeUndefined();
     });
 
     it("uses claudeSessionId directly when no snapshot is set (post-discovery state)", () => {
