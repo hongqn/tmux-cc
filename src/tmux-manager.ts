@@ -4,10 +4,25 @@
  * Each OpenClaw conversation maps to a dedicated tmux window running
  * a Claude Code CLI process.
  */
-import { exec as cpExec } from "node:child_process";
+import { exec as cpExec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execPromise = promisify(cpExec);
+
+/**
+ * Maximum literal-text payload size for `tmux send-keys -l`.
+ *
+ * The text is passed as a single argv entry, which on Linux must fit within
+ * ARG_MAX (typically 128KiB after env+padding). When CC fallbacks dump large
+ * conversation context (~180KB) into one user message, send-keys -l throws
+ * `spawn E2BIG`, which the gateway surfaces as
+ * "⚠️ Claude Code session is unavailable. Please retry." (HQN-18).
+ *
+ * Stay well under ARG_MAX so single-quote escaping (which can double payload
+ * size for quote-heavy text) still fits. Anything larger goes through
+ * load-buffer/paste-buffer (stdin), which has no argv-size limit.
+ */
+const SEND_KEYS_LITERAL_MAX_BYTES = 32 * 1024;
 
 const SEND_KEYS_DELAY_MS = 500;
 const READY_POLL_INTERVAL_MS = 500;
@@ -153,14 +168,47 @@ export async function createWindow(opts: TmuxManagerOptions, windowOpts: CreateW
 export async function sendKeys(tmuxSession: string, windowName: string, text: string): Promise<void> {
   const target = `${shellEscape(tmuxSession)}:${shellEscape(windowName)}`;
 
-  // Send the text in literal mode (no key binding interpretation)
-  await exec(`tmux send-keys -t ${target} -l ${shellEscape(text)}`);
+  if (Buffer.byteLength(text, "utf8") > SEND_KEYS_LITERAL_MAX_BYTES) {
+    // Big payloads can't fit in a single argv (ARG_MAX). Stage via a tmux
+    // paste buffer instead; load-buffer reads the text from stdin.
+    const bufferName = `tmuxcc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    await tmuxLoadBuffer(bufferName, text);
+    // -d: delete the buffer after pasting (no leak between calls).
+    // No -p: stay in plain mode so CC's TUI receives the same character
+    // stream it would have via send-keys -l (no bracketed-paste markers).
+    await exec(`tmux paste-buffer -d -b ${shellEscape(bufferName)} -t ${target}`);
+  } else {
+    // Send the text in literal mode (no key binding interpretation)
+    await exec(`tmux send-keys -t ${target} -l ${shellEscape(text)}`);
+  }
 
   // Wait before pressing Enter — Claude Code TUI needs time
   await sleep(SEND_KEYS_DELAY_MS);
 
   // Press Enter
   await exec(`tmux send-keys -t ${target} Enter`);
+}
+
+/**
+ * Load `text` into a named tmux paste buffer via stdin so payload size is
+ * not bounded by ARG_MAX. Buffer is consumed by a follow-up paste-buffer -d.
+ */
+async function tmuxLoadBuffer(bufferName: string, text: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("tmux", ["load-buffer", "-b", bufferName, "-"], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`tmux load-buffer exited ${code}: ${stderr.trim()}`));
+    });
+    child.stdin!.end(text, "utf8");
+  });
 }
 
 /**

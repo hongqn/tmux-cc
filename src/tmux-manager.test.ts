@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 import {
   ensureTmuxSession,
   createWindow,
@@ -6,14 +7,17 @@ import {
   windowExists,
   killWindow,
   readExitCode,
+  sendKeys,
 } from "./tmux-manager.js";
 
 // Mock exec from child_process (used via promisify).
 // Use callback-based error signaling (not throws) to work correctly with promisify.
 const execMock = vi.hoisted(() => vi.fn<any[], any>());
+const spawnMock = vi.hoisted(() => vi.fn<any[], any>());
 
 vi.mock("node:child_process", () => ({
   exec: execMock,
+  spawn: spawnMock,
 }));
 
 // Helpers for setting mock exec behavior
@@ -38,10 +42,36 @@ function getCmds(): string[] {
   return execMock.mock.calls.map((call: any[]) => call[0] as string);
 }
 
+// Build a stub for child_process.spawn that immediately succeeds and
+// records the data written to stdin so tests can assert on the payload.
+function makeFakeSpawn(opts: { exitCode?: number; stderr?: string } = {}) {
+  return (...args: any[]) => {
+    const child: any = new EventEmitter();
+    child.__args = args;
+    child.__stdinChunks = [] as Array<string | Buffer>;
+    child.stdin = {
+      end: (chunk?: string | Buffer) => {
+        if (chunk !== undefined) child.__stdinChunks.push(chunk);
+      },
+      write: (chunk: string | Buffer) => {
+        child.__stdinChunks.push(chunk);
+        return true;
+      },
+    };
+    child.stderr = new EventEmitter();
+    setImmediate(() => {
+      if (opts.stderr) child.stderr.emit("data", Buffer.from(opts.stderr));
+      child.emit("close", opts.exitCode ?? 0);
+    });
+    return child;
+  };
+}
+
 describe("tmux-manager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     execMock.mockImplementation(mockSuccess(""));
+    spawnMock.mockImplementation(makeFakeSpawn());
   });
 
   describe("ensureTmuxSession", () => {
@@ -246,6 +276,48 @@ describe("tmux-manager", () => {
     it("returns null on error", async () => {
       execMock.mockImplementation(mockError("window not found"));
       expect(await readExitCode("test-session", "cc-window1")).toBeNull();
+    });
+  });
+
+  describe("sendKeys", () => {
+    // Speed up the test — sendKeys waits SEND_KEYS_DELAY_MS before pressing Enter.
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+
+    it("uses send-keys -l for small payloads", async () => {
+      await sendKeys("test-session", "cc-window1", "hello world");
+
+      const cmds = getCmds();
+      expect(cmds.some((c) => c.includes("send-keys") && c.includes("-l") && c.includes("hello world"))).toBe(true);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("routes large payloads through load-buffer/paste-buffer (no E2BIG)", async () => {
+      const big = "x".repeat(200_000); // larger than ARG_MAX margin
+      await sendKeys("test-session", "cc-window1", big);
+
+      // Big text must NOT appear in any exec argv (that's the bug we fixed).
+      expect(getCmds().some((c) => c.includes(big))).toBe(false);
+
+      // load-buffer was spawned with stdin = the big text.
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const [bin, argv] = spawnMock.mock.calls[0];
+      expect(bin).toBe("tmux");
+      expect(argv).toContain("load-buffer");
+      const stdin = (spawnMock.mock.results[0].value as any).__stdinChunks.join("");
+      expect(stdin).toBe(big);
+
+      // paste-buffer was issued (with -d to clean up) and final Enter sent.
+      const cmds = getCmds();
+      expect(cmds.some((c) => c.includes("paste-buffer") && c.includes("-d"))).toBe(true);
+      expect(cmds.some((c) => c.includes("send-keys") && c.includes("Enter"))).toBe(true);
+    });
+
+    it("propagates load-buffer failures", async () => {
+      spawnMock.mockImplementation(makeFakeSpawn({ exitCode: 1, stderr: "no server" }));
+      const big = "y".repeat(200_000);
+      await expect(sendKeys("test-session", "cc-window1", big)).rejects.toThrow(/load-buffer exited 1/);
     });
   });
 });
