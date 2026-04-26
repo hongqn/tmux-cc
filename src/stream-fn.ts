@@ -1027,7 +1027,28 @@ async function sendMessageReliably(
       : await tmuxIsProcessAlive(config.tmuxSession, session.windowName);
     if (!alive) throw new Error("Agent process died while confirming sent message");
 
-    console.warn(`[tmux-cc] send confirm: no user transcript entry after attempt ${attempt}/${SEND_CONFIRM_MAX_ATTEMPTS}`);
+    // Diagnostics: capture agent state when send didn't land in transcript.
+    // The pane snapshot tells us what UI mode CC is stuck in (modal prompt,
+    // unsubmitted paste, error screen, etc.) so we can design the real fix.
+    const processing = adapter
+      ? await adapter.isProcessing(config.tmuxSession, session.windowName).catch(() => null)
+      : await tmuxIsClaudeProcessing(config.tmuxSession, session.windowName).catch(() => null);
+    let waitingForUserInput: boolean | null = null;
+    if (adapter?.isWaitingForUserInput) {
+      waitingForUserInput = await adapter
+        .isWaitingForUserInput(config.tmuxSession, session.windowName)
+        .catch(() => null);
+    }
+    const pane = await capturePane(config.tmuxSession, session.windowName, 30).catch(() => "");
+    const paneTrimmed = pane.replace(/\s+$/g, "");
+    console.warn(
+      `[tmux-cc] send confirm: no user transcript entry after attempt ${attempt}/${SEND_CONFIRM_MAX_ATTEMPTS} ` +
+      `(window=${session.windowName} sentLen=${text.length} processing=${processing} ` +
+      `waitingForUserInput=${waitingForUserInput} paneBytes=${pane.length})`,
+    );
+    if (paneTrimmed) {
+      console.warn(`[tmux-cc] send confirm pane snapshot:\n${paneTrimmed}\n[tmux-cc] send confirm pane snapshot end`);
+    }
     await sleep(SEND_CONFIRM_RETRY_DELAY_MS);
   }
 
