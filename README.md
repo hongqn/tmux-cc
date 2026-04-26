@@ -38,6 +38,27 @@ Then enable the plugin:
 openclaw config set plugins.tmux-cc.enabled true
 ```
 
+### Required: prevent gateway restarts from killing tmux
+
+By default, systemd's `KillMode=control-group` causes a gateway restart to
+tear down the entire cgroup, **including the tmux server** that hosts every
+Claude Code session. When the gateway comes back, all sessions are gone and
+you'll see `isProcessAlive: window gone` for any persisted session.
+
+Install this drop-in once per host running the gateway under systemd:
+
+```bash
+mkdir -p ~/.config/systemd/user/openclaw-gateway.service.d
+cat > ~/.config/systemd/user/openclaw-gateway.service.d/tmux-cc.conf <<'EOF'
+[Service]
+# Keep the tmux server (and all CC sessions) alive across gateway restarts.
+KillMode=process
+EOF
+systemctl --user daemon-reload
+```
+
+This takes effect on the next gateway restart.
+
 ## Configuration
 
 All settings are optional. Configure via `openclaw config set`:
