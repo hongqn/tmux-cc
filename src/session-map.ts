@@ -35,7 +35,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 const MODULE_INSTANCE_ID = randomBytes(4).toString("hex");
 console.log(`[tmux-cc] module instance ${MODULE_INSTANCE_ID} loaded`);
 
-/** In-memory map of session key → session state. */
+/** In-memory map of logical session key + adapter id → session state. */
 const sessions = new Map<string, SessionState>();
 
 /** Handle for the idle cleanup interval timer. */
@@ -45,6 +45,14 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null;
  *  Used to guard orphan cleanup — a process that never creates sessions
  *  (e.g., openclaw-agent) must not kill windows it doesn't own. */
 let hasEverCreatedSession = false;
+
+function sessionMapKey(sessionKey: string, adapter?: AgentAdapter): string {
+  return adapter ? `${sessionKey}::${adapter.id}` : sessionKey;
+}
+
+function matchesSessionMapKey(mapKey: string, sessionKey: string): boolean {
+  return mapKey === sessionKey || mapKey.startsWith(`${sessionKey}::`);
+}
 
 /** @internal Test-only: set the hasEverCreatedSession flag. */
 export function _setHasEverCreatedSession(value: boolean): void {
@@ -209,20 +217,24 @@ export function windowNameFromSessionKey(sessionKey: string): string {
 export async function deleteSession(
   sessionKey: string,
   config: TmuxClaudeConfig = {},
+  adapter?: AgentAdapter,
 ): Promise<void> {
-  const state = sessions.get(sessionKey);
-  if (!state) return;
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-  try {
-    await killWindow(mergedConfig.tmuxSession, state.windowName);
-  } catch {
-    // Window may already be gone
+  for (const [key, state] of sessions) {
+    if (adapter ? key === sessionMapKey(sessionKey, adapter) : matchesSessionMapKey(key, sessionKey)) {
+      try {
+        await killWindow(mergedConfig.tmuxSession, state.windowName);
+      } catch {
+        // Window may already be gone
+      }
+      sessions.delete(key);
+    }
   }
-  sessions.delete(sessionKey);
 }
 
-export function getSession(sessionKey: string): SessionState | null {
-  return sessions.get(sessionKey) ?? null;
+export function getSession(sessionKey: string, adapter?: AgentAdapter): SessionState | null {
+  if (adapter) return sessions.get(sessionMapKey(sessionKey, adapter)) ?? null;
+  return sessions.get(sessionKey) ?? [...sessions.entries()].find(([key]) => matchesSessionMapKey(key, sessionKey))?.[1] ?? null;
 }
 
 /**
@@ -241,7 +253,8 @@ export async function getOrCreateSession(
   agentAccountId?: string,
 ): Promise<SessionState> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-  const existing = sessions.get(sessionKey);
+  const mapKey = sessionMapKey(sessionKey, adapter);
+  const existing = sessions.get(mapKey);
 
   if (existing) {
     // Check if the process is still alive
@@ -285,7 +298,8 @@ async function createNewSession(
   adapter?: AgentAdapter,
   agentAccountId?: string,
 ): Promise<SessionState> {
-  const windowName = windowNameFromSessionKey(sessionKey);
+  const mapKey = sessionMapKey(sessionKey, adapter);
+  const windowName = windowNameFromSessionKey(mapKey);
 
   // Check if an existing window with this name is still alive and ready
   const isAlive = adapter
@@ -317,7 +331,7 @@ async function createNewSession(
       adapter,
     };
 
-    sessions.set(sessionKey, state);
+    sessions.set(mapKey, state);
     hasEverCreatedSession = true;
     return state;
   }
@@ -355,7 +369,7 @@ async function createNewSession(
     agentAccountId,
     adapter,
   };
-  sessions.set(sessionKey, state);
+  sessions.set(mapKey, state);
   hasEverCreatedSession = true;
 
   // Create the agent window via adapter or legacy path
@@ -523,15 +537,17 @@ const EAGER_CLEANUP_GRACE_MS = 120_000; // 2 minutes
 export function scheduleEagerCleanup(
   sessionKey: string,
   config: TmuxClaudeConfig = {},
+  adapter?: AgentAdapter,
 ): void {
-  const state = sessions.get(sessionKey);
+  const mapKey = sessionMapKey(sessionKey, adapter);
+  const state = sessions.get(mapKey);
   if (!state) return;
 
   const activityAtSchedule = state.lastActivityMs;
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
   const timer = setTimeout(async () => {
-    const current = sessions.get(sessionKey);
+    const current = sessions.get(mapKey);
     if (!current) return; // already cleaned up
     if (current.lastActivityMs !== activityAtSchedule) {
       // Session was active again — a new message arrived, skip cleanup
@@ -558,7 +574,7 @@ export function scheduleEagerCleanup(
     } catch (e) {
       console.error(`[tmux-cc] eagerCleanup: killWindow failed: ${e instanceof Error ? e.message : e}`);
     }
-    sessions.delete(sessionKey);
+    sessions.delete(mapKey);
   }, EAGER_CLEANUP_GRACE_MS);
 
   // Don't block process exit
@@ -704,7 +720,7 @@ export function getSessionCount(): number {
  * Get all active session keys.
  */
 export function getSessionKeys(): string[] {
-  return Array.from(sessions.keys());
+  return Array.from(new Set(Array.from(sessions.values(), (state) => state.sessionKey)));
 }
 
 /**

@@ -449,6 +449,42 @@ agents.defaults.bootstrapTotalMaxChars.`;
       expect(transcriptContainsUserText(entries, "cron payload")).toBe(true);
     });
 
+    it("matches long media turns when Claude normalizes whitespace and drops wrapper text", () => {
+      const expected = [
+        "Please grade this paper.",
+        "<file>",
+        "Question 1:     The candidate answered 15.",
+        "Question 2: The working spans multiple lines with repeated margin text.",
+        "DO NOT WRITE IN THIS MARGIN DO NOT WRITE IN THIS MARGIN",
+        "Question 3: The final answer is 3240.1 after compounding.",
+        "</file>",
+        "OpenClaw routing metadata and attachment instructions omitted by Claude Code.",
+      ].join("\n\n");
+      const acceptedByClaude = [
+        "Please grade this paper. <file>",
+        "Question 1: The candidate answered 15.",
+        "Question 2: The working spans multiple lines with repeated margin text.",
+        "DO NOT WRITE IN THIS MARGIN",
+        "Question 3: The final answer is 3240.1 after compounding.",
+        "</file>",
+      ].join(" ");
+      const entries: TranscriptEntry[] = [
+        { type: "user", message: { content: [{ type: "text", text: acceptedByClaude }] }, sessionId: "s1" },
+      ];
+
+      expect(transcriptContainsUserText(entries, expected)).toBe(true);
+    });
+
+    it("does not fuzzy-match unrelated long user turns", () => {
+      const expected = "alpha ".repeat(80) + "expected payload marker";
+      const unrelated = "beta ".repeat(80) + "different payload marker";
+      const entries: TranscriptEntry[] = [
+        { type: "user", message: { content: [{ type: "text", text: unrelated }] }, sessionId: "s1" },
+      ];
+
+      expect(transcriptContainsUserText(entries, expected)).toBe(false);
+    });
+
     it("does not match assistant-only activity", () => {
       const entries: TranscriptEntry[] = [
         {

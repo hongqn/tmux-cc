@@ -611,7 +611,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             const validation = primaryAdapter?.validateSession?.(sessionKeyName ?? sessionId, session.model);
             if (validation && validation.fallback) {
               console.log(`[tmux-cc] mid-stream swap to ${fallbackAdapter.id} model=${validation.fallback}`);
-              await deleteSession(sessionKey, config);
+              await deleteSession(sessionKey, config, adapter);
               adapter = fallbackAdapter;
               runConfig = { ...config, defaultModel: validation.fallback };
               session = await getOrCreateSession(sessionKey, runConfig.defaultModel, runConfig, adapter, agentAccountId ?? undefined);
@@ -689,7 +689,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           // Only eager-clean sessions with few turns (likely cron one-shots).
           // Multi-turn conversations are kept alive for the full idle timeout.
           if (session.turnCount <= 1) {
-            scheduleEagerCleanup(session.sessionKey, config);
+            scheduleEagerCleanup(session.sessionKey, config, session.adapter);
           }
         }
       } catch (err) {
@@ -1131,12 +1131,39 @@ export function transcriptContainsUserText(entries: TranscriptEntry[], expectedT
       .join("\n");
     const normalized = normalizeTranscriptText(text);
     if (!normalized) return false;
-    return normalized.includes(expected) || expected.includes(normalized);
+    return transcriptTextsMatch(normalized, expected);
   });
 }
 
 function normalizeTranscriptText(text: string): string {
-  return text.replace(/\r\n/g, "\n").trim();
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function transcriptTextsMatch(actual: string, expected: string): boolean {
+  if (actual.includes(expected) || expected.includes(actual)) return true;
+
+  // Claude Code can normalize/drop wrapper text around media-heavy prompts
+  // before writing the accepted user turn. Use token overlap only for long
+  // prompts so short unrelated messages do not accidentally confirm a send.
+  if (actual.length < 200 || expected.length < 200) return false;
+
+  const actualTokens = extractComparableTokens(actual);
+  const expectedTokens = extractComparableTokens(expected);
+  const smallerSize = Math.min(actualTokens.size, expectedTokens.size);
+  const largerSize = Math.max(actualTokens.size, expectedTokens.size);
+  if (smallerSize < 12) return false;
+
+  let common = 0;
+  for (const token of actualTokens) {
+    if (expectedTokens.has(token)) common++;
+  }
+
+  return common / smallerSize >= 0.65 && common / largerSize >= 0.45;
+}
+
+function extractComparableTokens(text: string): Set<string> {
+  const matches = text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_-]{2,}/gu) ?? [];
+  return new Set(matches);
 }
 
 /**

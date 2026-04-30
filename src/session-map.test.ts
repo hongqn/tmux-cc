@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSession, resolveSessionLocation, __resetForTests, isEphemeralSessionKeyName } from "./session-map.js";
+import { windowNameFromSessionKey, cleanupOrphanedWindows, _setHasEverCreatedSession, resolveSessionLocation, __resetForTests, isEphemeralSessionKeyName, getOrCreateSession, deleteSession, getSession, destroyAllSessions } from "./session-map.js";
 import * as tmuxManager from "./tmux-manager.js";
 import * as fsPromises from "node:fs/promises";
+import type { AgentAdapter } from "./adapters/types.js";
 
 vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(),
@@ -25,6 +26,34 @@ describe("session-map", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(async () => {
+    await destroyAllSessions({ tmuxSession: "test-tmux" });
+  });
+
+  function makeAdapter(id: string): AgentAdapter {
+    return {
+      id,
+      models: [],
+      createAgentWindow: vi.fn(() => Promise.resolve()),
+      waitForReady: vi.fn(() => Promise.resolve(true)),
+      isWindowReady: vi.fn(() => Promise.resolve(false)),
+      isProcessAlive: vi.fn(() => Promise.resolve(false)),
+      isProcessing: vi.fn(() => Promise.resolve(false)),
+      switchModel: vi.fn(() => Promise.resolve()),
+      handleBlockingPrompts: vi.fn(() => Promise.resolve()),
+      getExistingTranscriptPaths: vi.fn(() => new Map()),
+      findTranscriptBySessionId: vi.fn(() => null),
+      findNewTranscript: vi.fn(() => null),
+      findGrowingTranscript: vi.fn(() => null),
+      findLatestTranscript: vi.fn(() => null),
+      extractSessionId: vi.fn(() => "session-id"),
+      readNewEntries: vi.fn(() => ({ entries: [], newOffset: 0 })),
+      extractAssistantResponse: vi.fn(() => ({ text: "", isComplete: false })),
+      setupWorkspace: vi.fn(),
+      resolveModelId: vi.fn((modelId: string) => modelId),
+    };
+  }
+
   describe("windowNameFromSessionKey", () => {
     it("prefixes with cc-", () => {
       expect(windowNameFromSessionKey("test")).toBe("cc-test");
@@ -46,6 +75,31 @@ describe("session-map", () => {
 
     it("preserves alphanumeric, dash, and underscore", () => {
       expect(windowNameFromSessionKey("my_session-123")).toBe("cc-my_session-123");
+    });
+  });
+
+  describe("adapter-scoped runtime sessions", () => {
+    it("keeps separate live sessions for different adapters sharing one logical session key", async () => {
+      vi.mocked(tmuxManager.windowExists).mockResolvedValue(false);
+      const copilotAdapter = makeAdapter("copilot-cli");
+      const claudeAdapter = makeAdapter("claude-code");
+      const config = { tmuxSession: "test-tmux", workingDirectory: "/tmp/test-wd" };
+
+      const copilotSession = await getOrCreateSession("shared-session", "claude-opus-4.6", config, copilotAdapter);
+      const claudeSession = await getOrCreateSession("shared-session", "sonnet-4.6", config, claudeAdapter);
+
+      expect(copilotSession.sessionKey).toBe("shared-session");
+      expect(claudeSession.sessionKey).toBe("shared-session");
+      expect(copilotSession.windowName).not.toBe(claudeSession.windowName);
+      expect(copilotSession.windowName).toContain("copilot-cli");
+      expect(claudeSession.windowName).toContain("claude-code");
+
+      await deleteSession("shared-session", config, copilotAdapter);
+
+      expect(getSession("shared-session", copilotAdapter)).toBeNull();
+      expect(getSession("shared-session", claudeAdapter)).toBe(claudeSession);
+      expect(tmuxManager.killWindow).toHaveBeenCalledWith("test-tmux", copilotSession.windowName);
+      expect(tmuxManager.killWindow).not.toHaveBeenCalledWith("test-tmux", claudeSession.windowName);
     });
   });
 
