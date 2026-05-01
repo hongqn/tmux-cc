@@ -161,6 +161,24 @@ describe("tmux-manager", () => {
       expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
 
+    it("returns false when the pane shows Claude Code's unavailable banner", async () => {
+      execMock.mockImplementation((cmd: string, _opts: any, callback?: Function) => {
+        const cb = typeof _opts === "function" ? _opts : callback;
+        if (cmd.includes("list-panes")) {
+          if (cb) cb(null, { stdout: "claude 0", stderr: "" });
+          return {};
+        }
+        if (cmd.includes("capture-pane")) {
+          if (cb) cb(null, { stdout: "⚠️ Claude Code session is unavailable. Please retry.", stderr: "" });
+          return {};
+        }
+        if (cb) cb(null, { stdout: "", stderr: "" });
+        return {};
+      });
+
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
+    });
+
     it("returns false on error", async () => {
       execMock.mockImplementation(mockError("window not found"));
       expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
