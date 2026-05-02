@@ -237,6 +237,8 @@ export function parseEvent(line: string): TranscriptEntry | null {
         return parseAssistantMessage(event, sessionId);
       case "session.error":
         return parseSessionError(event, sessionId);
+      case "session.compaction_complete":
+        return parseCompactionComplete(event, sessionId);
       default:
         return null;
     }
@@ -286,6 +288,22 @@ function parseSessionError(event: CopilotEvent, sessionId: string): TranscriptEn
     sessionId,
     timestamp: event.timestamp,
     stop_reason: "end_turn",
+  };
+}
+
+function parseCompactionComplete(event: CopilotEvent, sessionId: string): TranscriptEntry | null {
+  const checkpointPath = event.data?.checkpointPath;
+  if (typeof checkpointPath !== "string" || checkpointPath.length === 0) {
+    return null;
+  }
+
+  return {
+    type: "system",
+    subtype: "compaction_complete",
+    checkpointPath,
+    message: { content: [] },
+    sessionId,
+    timestamp: event.timestamp,
   };
 }
 
