@@ -317,6 +317,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         );
         if (!readyForSend) return;
 
+        finalText = applyPendingCompactionRecovery(session, finalText);
+
         // Step 6: Record current transcript offset before sending.
         // The session's transcriptPath was set during createNewSession
         // (via snapshot-based discovery). For subsequent messages in the
@@ -502,12 +504,13 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
               for (const msg of msgs) {
                 const text = extractSteeringText(msg);
                 if (text) {
-                  console.log(`[tmux-cc] steering: injecting message (${text.length} chars) into ${session.windowName}`);
+                  const steeringText = applyPendingCompactionRecovery(session, text);
+                  console.log(`[tmux-cc] steering: injecting message (${steeringText.length} chars) into ${session.windowName}`);
                   try {
                     const steeringOffset = getTranscriptSize(session);
                     await sendMessageReliably(
                       session,
-                      text,
+                      steeringText,
                       steeringOffset,
                       config,
                       adapter,
@@ -909,6 +912,19 @@ export function extractSteeringText(msg: unknown): string | null {
     return text || null;
   }
   return null;
+}
+
+const COMPACTION_RECOVERY_PREFIX = `[Context compaction just occurred. Before responding, read the checkpoint at
+{checkpointPath} to recover your task state, paying special attention to
+<work_done> and <next_steps>. Do NOT redo work already listed as completed.]`;
+
+export function applyPendingCompactionRecovery(session: SessionState, text: string): string {
+  const checkpointPath = session.pendingCompactionCheckpoint;
+  if (!checkpointPath) return text;
+
+  session.pendingCompactionCheckpoint = undefined;
+  console.log(`[tmux-cc] compaction recovery: prepended checkpoint guidance`);
+  return `${COMPACTION_RECOVERY_PREFIX.replace("{checkpointPath}", checkpointPath)}\n\n${text}`;
 }
 
 /**
@@ -1330,6 +1346,7 @@ async function pollForResponse(
       lastActiveTime = Date.now();
       session.lastActivityMs = Date.now();
       allEntries.push(...result.entries);
+      recordCompactionCheckpoint(session, result.entries);
       onNewEntries?.(allEntries);
 
       const entryTypes = result.entries.map(e => e.type).join(",");
@@ -1540,6 +1557,19 @@ async function pollForResponse(
     // capturePane may fail if the window is gone; ignore.
   }
   return null;
+}
+
+export function recordCompactionCheckpoint(session: SessionState, entries: TranscriptEntry[]): void {
+  for (const entry of entries) {
+    if (
+      entry.type === "system" &&
+      entry.subtype === "compaction_complete" &&
+      entry.checkpointPath
+    ) {
+      session.pendingCompactionCheckpoint = entry.checkpointPath;
+      console.log(`[tmux-cc] compaction recovery: captured checkpoint`);
+    }
+  }
 }
 
 /**

@@ -5,9 +5,11 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deriveSessionKey,
+  applyPendingCompactionRecovery,
   extractNewUserMessages,
   extractSteeringText,
   extractUnstreamedFinalText,
+  recordCompactionCheckpoint,
   stripBootstrapWarnings,
   transcriptContainsUserText,
   updateTranscriptPath,
@@ -401,6 +403,65 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
     it("returns null for object without content", () => {
       expect(extractSteeringText({ role: "user" })).toBeNull();
+    });
+  });
+
+  describe("applyPendingCompactionRecovery", () => {
+    function makeSession(overrides: Partial<SessionState> = {}): SessionState {
+      return {
+        sessionKey: "tmux-test",
+        windowName: "cc-test",
+        transcriptOffset: 0,
+        lastActivityMs: Date.now(),
+        model: "sonnet-4.6",
+        turnCount: 0,
+        ...overrides,
+      };
+    }
+
+    it("prefixes the next user message with checkpoint recovery guidance and clears the pending checkpoint", () => {
+      const session = makeSession({
+        pendingCompactionCheckpoint: "/tmp/copilot-checkpoints/001-recover.md",
+      });
+
+      const result = applyPendingCompactionRecovery(session, "run the scheduled report");
+
+      expect(result).toContain("Context compaction just occurred");
+      expect(result).toContain("/tmp/copilot-checkpoints/001-recover.md");
+      expect(result).toContain("<work_done>");
+      expect(result).toContain("<next_steps>");
+      expect(result).toContain("run the scheduled report");
+      expect(session.pendingCompactionCheckpoint).toBeUndefined();
+    });
+
+    it("leaves messages unchanged when no compaction checkpoint is pending", () => {
+      const session = makeSession();
+
+      expect(applyPendingCompactionRecovery(session, "regular message")).toBe("regular message");
+      expect(session.pendingCompactionCheckpoint).toBeUndefined();
+    });
+
+    it("records the latest compaction checkpoint from transcript entries", () => {
+      const session = makeSession();
+
+      recordCompactionCheckpoint(session, [
+        {
+          type: "system",
+          subtype: "compaction_complete",
+          checkpointPath: "/tmp/copilot-checkpoints/001-recover.md",
+          message: { content: [] },
+          sessionId: "s1",
+        },
+        {
+          type: "system",
+          subtype: "compaction_complete",
+          checkpointPath: "/tmp/copilot-checkpoints/002-recover.md",
+          message: { content: [] },
+          sessionId: "s1",
+        },
+      ]);
+
+      expect(session.pendingCompactionCheckpoint).toBe("/tmp/copilot-checkpoints/002-recover.md");
     });
   });
 

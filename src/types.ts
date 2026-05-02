@@ -67,6 +67,11 @@ export interface SessionState {
   agentAccountId?: string;
   /** Reference to the adapter that manages this session (for cleanup checks). */
   adapter?: import("./adapters/types.js").AgentAdapter;
+  /**
+   * Copilot CLI checkpoint path captured after context compaction. The next
+   * user/steering message consumes this by adding recovery guidance.
+   */
+  pendingCompactionCheckpoint?: string;
 }
 
 /**
@@ -86,6 +91,8 @@ export interface TranscriptEntry {
   stop_reason?: "end_turn" | "max_tokens" | string;
   /** System entry subtype (e.g., "turn_duration"). */
   subtype?: string;
+  /** Checkpoint path emitted by Copilot CLI on session.compaction_complete. */
+  checkpointPath?: string;
   /**
    * True for the special `type:"user"` entry CC writes when it auto-compacts
    * (or the user runs `/compact`). The `message.content` (a string in CC's

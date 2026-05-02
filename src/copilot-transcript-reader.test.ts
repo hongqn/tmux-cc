@@ -143,6 +143,27 @@ describe("copilot-transcript-reader", () => {
       expect((textBlock as { type: "text"; text: string }).text).toContain("rate limit");
     });
 
+    it("parses session.compaction_complete with checkpointPath as a system entry", () => {
+      const event = JSON.stringify({
+        type: "session.compaction_complete",
+        data: {
+          success: true,
+          sessionId: "abc-123",
+          checkpointNumber: 1,
+          checkpointPath: "/tmp/copilot-checkpoints/001-recover.md",
+          summaryContent: "<overview>Recovered state</overview>",
+        },
+        timestamp: "2026-04-10T00:03:00.000Z",
+      });
+      const entry = parseEvent(event) as (TranscriptEntry & { checkpointPath?: string }) | null;
+      expect(entry).not.toBeNull();
+      expect(entry!.type).toBe("system");
+      expect(entry!.subtype).toBe("compaction_complete");
+      expect(entry!.checkpointPath).toBe("/tmp/copilot-checkpoints/001-recover.md");
+      expect(entry!.message.content).toEqual([]);
+      expect(entry!.sessionId).toBe("abc-123");
+    });
+
     it("ignores session.start events", () => {
       const event = JSON.stringify({
         type: "session.start",
