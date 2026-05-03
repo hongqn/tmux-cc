@@ -69,16 +69,18 @@ export interface StreamFnOptions {
 /**
  * Derive a stable session key from the conversation context.
  *
- * Prefers the provider-level `sessionId` forwarded by pi-agent-core
- * (set by OpenClaw from its internal session key). This is unique per
- * conversation and eliminates cross-group collisions.
+ * Prefers the provider-level `sessionId` forwarded by pi-agent-core.
+ * When OpenClaw includes conversation metadata in the current user message,
+ * that stable conversation scope is folded into the identifier so sender-
+ * scoped gateway IDs cannot merge different chats into one tmux window.
  *
  * Falls back to a SHA-256 hash of the first user message when sessionId
  * is unavailable (e.g. direct API testing).
  */
 export function deriveSessionKey(messages: Message[], sessionId?: string): string {
-  if (sessionId) {
-    const hash = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+  const scopedSessionId = scopeIdentifierWithConversationMetadata(sessionId, messages);
+  if (scopedSessionId) {
+    const hash = createHash("sha256").update(scopedSessionId).digest("hex").slice(0, 16);
     return `tmux-${hash}`;
   }
 
@@ -101,11 +103,103 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
   return `tmux-${hash}`;
 }
 
+function scopeIdentifierWithConversationMetadata(
+  identifier: string | undefined,
+  messages: Message[],
+): string | undefined {
+  const metadataScope = extractConversationMetadataScope(messages);
+  if (!metadataScope) return identifier;
+  if (identifier?.includes("#conversation:")) return identifier;
+  const scopeHash = createHash("sha256").update(metadataScope).digest("hex").slice(0, 16);
+  return `${identifier ?? "conversation"}#conversation:${scopeHash}`;
+}
+
+function extractConversationMetadataScope(messages: Message[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "user") continue;
+    const text = userMessageText(msg as UserMessage);
+    const metadata = parseConversationInfoMetadata(text);
+    if (!metadata) continue;
+
+    const scope = conversationScopeFromMetadata(metadata);
+    if (scope) return scope;
+  }
+  return null;
+}
+
+function conversationScopeFromMetadata(metadata: Record<string, unknown>): string | null {
+  const stableScope: Record<string, string | number> = {};
+  for (const key of ["conversation_id", "chat_id", "thread_id"]) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) stableScope[key] = value;
+    if (typeof value === "number") stableScope[key] = value;
+  }
+
+  const label = metadata.conversation_label;
+  if (typeof label === "string" && label.trim()) {
+    const id = label.match(/\bid:([^\s,]+)/i)?.[1];
+    if (id) stableScope.conversation_label_id = id;
+    else stableScope.conversation_label = label;
+  }
+
+  if (Object.keys(stableScope).length > 0) return JSON.stringify(stableScope);
+
+  const groupSubject = metadata.group_subject;
+  if (typeof groupSubject === "string" && groupSubject.trim()) {
+    const fallbackScope: Record<string, string | boolean> = { group_subject: groupSubject };
+    if (typeof metadata.is_group_chat === "boolean") {
+      fallbackScope.is_group_chat = metadata.is_group_chat;
+    }
+    return JSON.stringify(fallbackScope);
+  }
+
+  return null;
+}
+
+function userMessageText(message: UserMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return message.content
+    .filter((block) => block.type === "text")
+    .map((block) => (block as TextContent).text)
+    .join("\n");
+}
+
+function parseConversationInfoMetadata(text: string): Record<string, unknown> | null {
+  const normalized = text.replace(/^\s*>\s?/gm, "");
+  const marker = normalized.search(/Conversation info \(untrusted metadata\):/i);
+  if (marker < 0) return null;
+
+  const afterMarker = normalized.slice(marker);
+  const fenced = afterMarker.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonText = fenced?.[1] ?? afterMarker.match(/\{[\s\S]*?\}/)?.[0];
+  if (!jsonText) return null;
+
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isConversationScopedSessionKeyName(name: string | null | undefined): name is string {
+  if (!name) return false;
+  const parts = name.split(":");
+  const telegramIndex = parts.indexOf("telegram");
+  if (telegramIndex < 0) return false;
+  const kind = parts[telegramIndex + 1];
+  const value = parts[telegramIndex + 2];
+  return Boolean(value) && (kind === "chat" || kind === "group" || kind === "slash" || kind === "btw");
+}
+
 /**
  * Create the StreamFn for the tmux-cc provider.
  *
  * The returned function:
- * 1. Derives a session key from the first user message (stable per conversation)
+ * 1. Derives a stable session key for the current conversation
  * 2. Extracts new user message text from context (ignores system prompt, history, tools)
  * 3. Handles image attachments by saving to temp files
  * 4. Sends the message to Claude Code via tmux send-keys
@@ -183,6 +277,12 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const location = await resolveSessionLocation(sessionId);
         const agentAccountId = location?.agentId ?? null;
         const sessionKeyName = location?.keyName ?? null;
+        const scopedSessionKeyName = isConversationScopedSessionKeyName(sessionKeyName)
+          ? sessionKeyName
+          : scopeIdentifierWithConversationMetadata(sessionKeyName ?? undefined, context.messages);
+        const scopedSessionId = scopeIdentifierWithConversationMetadata(sessionId, context.messages);
+        const stableSessionKeyName = scopedSessionKeyName ?? sessionKeyName;
+        const stableSessionId = scopedSessionId ?? sessionId;
 
         // Recover a previously-used sessionKey so msg 1 (sessionKeyName race
         // — sessions.json not yet written) and msg 2 (sessionKeyName now
@@ -210,7 +310,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Failure → caller falls back to fresh start (no memory) — see
         // src/rotation.ts for the full design.
         const rotationSummary = await performRotationIfPending(
-          sessionKeyName,
+          stableSessionKeyName,
           ephemeral,
           {
             getStableSessionKey,
@@ -222,28 +322,28 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
 
         let sessionKey: string | undefined;
         let sessionKeySource: string = "derived";
-        if (sessionKeyName && !ephemeral) {
-          const recovered = getStableSessionKey(sessionKeyName);
+        if (stableSessionKeyName && !ephemeral) {
+          const recovered = getStableSessionKey(stableSessionKeyName);
           if (recovered) { sessionKey = recovered; sessionKeySource = "stable(sessionKeyName)"; }
         }
-        if (!sessionKey && sessionId) {
-          const recovered = getStableSessionKey(sessionId);
+        if (!sessionKey && stableSessionId) {
+          const recovered = getStableSessionKey(stableSessionId);
           if (recovered) { sessionKey = recovered; sessionKeySource = "stable(sessionId)"; }
         }
         if (!sessionKey) {
           // For ephemeral runs, fall back to sessionId only — never sessionKeyName —
           // so each invocation derives a fresh key when sessionId is also fresh.
-          const fallback = ephemeral ? sessionId : (sessionKeyName ?? sessionId);
+          const fallback = ephemeral ? stableSessionId : (stableSessionKeyName ?? stableSessionId);
           sessionKey = deriveSessionKey(context.messages, fallback);
         }
 
         // Persist under sessionId always (covers same-run retries). Persist
         // under sessionKeyName only for non-ephemeral kinds, so ephemeral runs
         // don't pin themselves to the same sessionKey on the next invocation.
-        if (sessionId) persistStableSessionKey(sessionId, sessionKey);
-        if (sessionKeyName && !ephemeral) persistStableSessionKey(sessionKeyName, sessionKey);
+        if (stableSessionId) persistStableSessionKey(stableSessionId, sessionKey);
+        if (stableSessionKeyName && !ephemeral) persistStableSessionKey(stableSessionKeyName, sessionKey);
 
-        console.log(`[tmux-cc] run: sessionKey=${sessionKey} (${sessionKeySource}), sessionKeyName=${sessionKeyName ?? "null"}, ephemeral=${ephemeral}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
+        console.log(`[tmux-cc] run: sessionKey=${sessionKey} (${sessionKeySource}), sessionKeyName=${sessionKeyName ?? "null"}, metadataScoped=${scopedSessionKeyName || scopedSessionId ? "true" : "false"}, ephemeral=${ephemeral}, messageCount=${context.messages.length}, sessionId=${sessionId ?? "none"}`);
 
         // Step 2: Extract new user message(s) from context
         const userText = extractNewUserMessages(context.messages);
@@ -418,7 +518,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             if (
               entry.isCompactSummary &&
               entry.type === "user" &&
-              sessionKeyName &&
+              stableSessionKeyName &&
               !ephemeral
             ) {
               const summary = entry.message.content
@@ -430,10 +530,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
               if (summary.trim()) {
                 console.log(
                   `[tmux-cc] rotation: detected isCompactSummary, ` +
-                  `sessionKeyName=${sessionKeyName}, claudeSessionId=${session.claudeSessionId ?? "?"}, ` +
+                  `sessionKeyName=${sessionKeyName ?? "metadata-scoped"}, claudeSessionId=${session.claudeSessionId ?? "?"}, ` +
                   `summaryLen=${summary.length}`,
                 );
-                stashPendingRotation(sessionKeyName, {
+                stashPendingRotation(stableSessionKeyName, {
                   summary,
                   oldClaudeSessionId: session.claudeSessionId,
                   detectedAt: Date.now(),
