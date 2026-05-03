@@ -102,6 +102,102 @@ describe("stream-fn", () => {
       expect(keyWithSession).not.toBe(keyWithoutSession);
     });
 
+    it("separates conversation metadata scopes even when the gateway sessionId is reused", () => {
+      const messagesForGroupA: Message[] = [
+        {
+          role: "user",
+          content: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            JSON.stringify({
+              message_id: "1001",
+              sender_id: "same-sender",
+              conversation_label: "assistant id:-100111",
+              group_subject: "assistant",
+              is_group_chat: true,
+            }),
+            "```",
+            "",
+            "generic request",
+          ].join("\n"),
+          timestamp: 1000,
+        },
+      ];
+      const messagesForGroupB: Message[] = [
+        {
+          role: "user",
+          content: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            JSON.stringify({
+              message_id: "2002",
+              sender_id: "same-sender",
+              conversation_label: "archive id:-100222",
+              group_subject: "archive",
+              is_group_chat: true,
+            }),
+            "```",
+            "",
+            "generic request",
+          ].join("\n"),
+          timestamp: 1000,
+        },
+      ];
+
+      expect(deriveSessionKey(messagesForGroupA, "sender-scoped-session")).not.toBe(
+        deriveSessionKey(messagesForGroupB, "sender-scoped-session"),
+      );
+    });
+
+    it("keeps the same conversation metadata scope despite per-message metadata changes", () => {
+      const firstTurn: Message[] = [
+        {
+          role: "user",
+          content: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            JSON.stringify({
+              message_id: "1001",
+              sender_id: "sender-a",
+              conversation_label: "assistant id:-100111",
+              timestamp: "2026-05-03T01:00:00Z",
+              group_subject: "assistant",
+              is_group_chat: true,
+            }),
+            "```",
+            "",
+            "first generic request",
+          ].join("\n"),
+          timestamp: 1000,
+        },
+      ];
+      const secondTurn: Message[] = [
+        {
+          role: "user",
+          content: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            JSON.stringify({
+              message_id: "1002",
+              sender_id: "sender-b",
+              conversation_label: "assistant id:-100111",
+              timestamp: "2026-05-03T01:05:00Z",
+              group_subject: "assistant",
+              is_group_chat: true,
+            }),
+            "```",
+            "",
+            "second generic request",
+          ].join("\n"),
+          timestamp: 2000,
+        },
+      ];
+
+      expect(deriveSessionKey(firstTurn, "gateway-session")).toBe(
+        deriveSessionKey(secondTurn, "gateway-session"),
+      );
+    });
+
     it("falls back to first message hash when sessionId is undefined", () => {
       const messages: Message[] = [{ role: "user", content: "Hello", timestamp: 1000 }];
       const key1 = deriveSessionKey(messages, undefined);
