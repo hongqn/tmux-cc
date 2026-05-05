@@ -725,7 +725,8 @@ export function getSessionKeys(): string[] {
 
 /**
  * sessionKeyName whose runs are independent: each invocation is a fresh task
- * with no memory carryover (e.g. cron jobs, Telegram /btw side questions).
+ * with no memory carryover (e.g. raw or agent-scoped cron jobs, Telegram /btw
+ * side questions).
  *
  * For these kinds, reusing the same tmux window + persisted Claude Code
  * session causes the on-disk transcript JSONL to grow unbounded across runs.
@@ -741,10 +742,17 @@ export function getSessionKeys(): string[] {
  */
 export function isEphemeralSessionKeyName(name: string | null | undefined): boolean {
   if (!name) return false;
-  const s = name.split(":");
+  const raw = name.trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.startsWith("cron:")) return true;
+
+  const s = raw.split(":").filter(Boolean);
   // Expected shape: agent:<agent>:<kind>[:<sub>[:<arg>...]]
   if (s.length < 3) return false;
-  if (s[2] === "cron") return true;
-  if (s[2] === "telegram" && s[3] === "btw") return true;
+  if (s[0] !== "agent") return false;
+
+  const rest = s.slice(2).join(":");
+  if (rest.startsWith("cron:")) return true;
+  if (rest.startsWith("telegram:btw:")) return true;
   return false;
 }

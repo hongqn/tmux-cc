@@ -311,6 +311,10 @@ describe("session-map", () => {
   });
 
   describe("isEphemeralSessionKeyName", () => {
+    it("returns true for raw cron session keys", () => {
+      expect(isEphemeralSessionKeyName("cron:39c55720-766f-45e0-b3ef-a77bbc653a03")).toBe(true);
+    });
+
     it("returns true for cron sessionKeyName", () => {
       expect(isEphemeralSessionKeyName("agent:main:cron:39c55720-766f-45e0-b3ef-a77bbc653a03")).toBe(true);
     });

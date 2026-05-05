@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deriveSessionKey,
+  resolveSessionKeySeed,
   extractNewUserMessages,
   extractSteeringText,
   extractUnstreamedFinalText,
@@ -501,6 +502,7 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
   describe("ephemeral sessionKeyName <-> deriveSessionKey integration", () => {
     it("ephemeral helper agrees with documented kinds", () => {
+      expect(isEphemeralSessionKeyName("cron:job-1")).toBe(true);
       expect(isEphemeralSessionKeyName("agent:main:cron:job-1")).toBe(true);
       expect(isEphemeralSessionKeyName("agent:horo:telegram:btw:42")).toBe(true);
       expect(isEphemeralSessionKeyName("agent:horo:telegram:chat:-100")).toBe(false);
@@ -518,6 +520,16 @@ agents.defaults.bootstrapTotalMaxChars.`;
     it("deriveSessionKey with different sessionId fallback yields different keys (fresh-per-run)", () => {
       const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
       expect(deriveSessionKey(messages, "cron-run-1")).not.toBe(deriveSessionKey(messages, "cron-run-2"));
+    });
+
+    it("uses a fresh derivation seed for ephemeral sessions without a gateway sessionId", () => {
+      const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
+      const firstSeed = resolveSessionKeySeed("cron:job-1", undefined, true, () => "run-1");
+      const secondSeed = resolveSessionKeySeed("cron:job-1", undefined, true, () => "run-2");
+
+      expect(firstSeed).toBe("ephemeral:run-1");
+      expect(secondSeed).toBe("ephemeral:run-2");
+      expect(deriveSessionKey(messages, firstSeed)).not.toBe(deriveSessionKey(messages, secondSeed));
     });
   });
 
