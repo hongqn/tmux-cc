@@ -404,7 +404,7 @@ describe("acceptance: model selection", () => {
       if (cmd.includes("pane_current_command")) return "claude 0";
       if (cmd.includes("capture-pane")) {
         processingCallCount++;
-        if (processingCallCount <= 1) return "esc to interrupt";
+        if (processingCallCount <= 2) return "esc to interrupt";
         return "❯ ";
       }
       return "";

@@ -359,11 +359,38 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             () => cancelled,
           );
         } catch (e) {
-          // Window may have been killed between isProcessAlive check and sendKeys
-          console.error(`[tmux-cc] sendKeys failed: ${e instanceof Error ? e.message : e}`);
-          emitTextResponse(stream, "⚠️ Claude Code session is unavailable. Please retry.");
-          await killWindow(config.tmuxSession, session.windowName);
-          return;
+          // Window may have been killed between isProcessAlive check and sendKeys,
+          // or CC may report an internal unavailable state while tmux still accepts
+          // keystrokes. Restart once and re-inject before surfacing the failure.
+          const firstError = e instanceof Error ? e : new Error(String(e));
+          console.error(`[tmux-cc] sendKeys failed: ${firstError.message}`);
+
+          if (!cancelled && shouldRestartAfterSendFailure(firstError)) {
+            console.log(`[tmux-cc] sendKeys recovery: restarting session and retrying message`);
+            try {
+              session = await restartSession(session, runConfig, adapter);
+              cancelSession = session;
+              offsetBeforeSend = await sendMessageReliably(
+                session,
+                finalText,
+                0,
+                runConfig,
+                adapter,
+                sessionKeyName ?? sessionId,
+                () => cancelled,
+              );
+            } catch (retryError) {
+              const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+              console.error(`[tmux-cc] sendKeys recovery failed: ${retryMessage}`);
+              emitError(stream, `Claude Code session is unavailable after restart: ${retryMessage}`);
+              await killWindow(config.tmuxSession, session.windowName);
+              return;
+            }
+          } else {
+            emitError(stream, `Claude Code session is unavailable: ${firstError.message}`);
+            await killWindow(config.tmuxSession, session.windowName);
+            return;
+          }
         }
 
         // Step 7.5: Emit early `start` event to prevent gateway stall timeout.
@@ -1068,6 +1095,16 @@ async function sendMessageReliably(
   throw new Error("Message was not accepted by the agent transcript after retries");
 }
 
+function shouldRestartAfterSendFailure(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("session is unavailable") ||
+    message.includes("not accepted by the agent transcript") ||
+    message.includes("agent process died while confirming sent message") ||
+    message.includes("agent was not ready for message retry")
+  );
+}
+
 async function waitForUserTurnInTranscript(
   session: SessionState,
   expectedText: string,
@@ -1757,7 +1794,10 @@ function emitError(
   stream: ReturnType<typeof createAssistantMessageEventStream>,
   message: string,
 ): void {
-  const errorMessage = buildAssistantMessage(message);
+  const errorMessage = buildAssistantMessage({
+    text: message,
+    isComplete: true,
+  });
   errorMessage.stopReason = "error";
   errorMessage.errorMessage = message;
 

@@ -29,6 +29,7 @@ const READY_POLL_INTERVAL_MS = 500;
 // 120s allows for slow `claude --resume` startup on large (>500KB) transcripts.
 const READY_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_HEAP_MB = 1024;
+const CLAUDE_SESSION_UNAVAILABLE_MARKER = "Claude Code session is unavailable";
 
 export interface TmuxManagerOptions {
   /** Name of the tmux session to use. */
@@ -239,6 +240,13 @@ export async function isProcessAlive(tmuxSession: string, windowName: string, pr
     const info = await exec(`tmux list-panes -t ${target} -F "#{pane_current_command} #{pane_dead}"`);
     const dead = info.endsWith(" 1");
     if (dead) return false;
+
+    const pane = await exec(`tmux capture-pane -t ${target} -p -S -30`).catch(() => "");
+    if (isClaudeSessionUnavailablePane(pane)) {
+      console.log(`[tmux-cc] isProcessAlive: pane reports Claude Code session unavailable, window=${windowName}`);
+      return false;
+    }
+
     // Pane is alive (pane_dead=0).  Log a warning if pane_current_command
     // doesn't contain the expected process name — this can happen transiently
     // when the agent spawns child processes but doesn't mean the agent died.
@@ -251,6 +259,10 @@ export async function isProcessAlive(tmuxSession: string, windowName: string, pr
     console.log(`[tmux-cc] isProcessAlive: window gone, window=${windowName}: ${e instanceof Error ? e.message : e}`);
     return false;
   }
+}
+
+export function isClaudeSessionUnavailablePane(content: string): boolean {
+  return content.includes(CLAUDE_SESSION_UNAVAILABLE_MARKER);
 }
 
 /**
