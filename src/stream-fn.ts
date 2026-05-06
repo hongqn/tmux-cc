@@ -433,6 +433,11 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           lastStreamEventMs = Date.now();
         };
 
+        const appendFinalText = (text: string) => {
+          const block: TextContent = { type: "text", text };
+          partialContent.push(block);
+        };
+
         const onNewEntries = (allEntries: TranscriptEntry[]) => {
           for (let i = lastProcessedEntryIdx; i < allEntries.length; i++) {
             const entry = allEntries[i];
@@ -469,6 +474,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
             }
 
             if (entry.type !== "assistant") continue;
+            if (isTerminalAssistantEntry(allEntries, i)) continue;
 
             // Only stream natural-language reasoning: real thinking content
             // (usually empty for CC login auth) and CC's prose commentary
@@ -676,29 +682,8 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}, thinkingBlocks=${partialContent.filter(b => b.type === "thinking").length}, model=${session.model}`);
 
         if (finalResponseText) {
-          const textBlock: TextContent = { type: "text", text: finalResponseText };
-          partialContent.push(textBlock);
-          const textContentIndex = partialContent.length - 1;
-          const finalMessage = makePartial();
-
-          stream.push({
-            type: "text_start",
-            contentIndex: textContentIndex,
-            partial: finalMessage,
-          });
-          stream.push({
-            type: "text_delta",
-            contentIndex: textContentIndex,
-            delta: finalResponseText,
-            partial: finalMessage,
-          });
-          stream.push({
-            type: "text_end",
-            contentIndex: textContentIndex,
-            content: finalResponseText,
-            partial: finalMessage,
-          });
-          console.log(`[tmux-cc] pushed: final text events, len=${finalResponseText.length}`);
+          appendFinalText(finalResponseText);
+          console.log(`[tmux-cc] appended final text to done message only, len=${finalResponseText.length}`);
         } else if (response.text) {
           console.log(`[tmux-cc] skipped duplicate final text already emitted via progressive stream, len=${response.text.length}`);
         }
@@ -958,6 +943,19 @@ export function extractUnstreamedFinalText(finalText: string, streamedTextParts:
     return finalText.slice(streamedText.length);
   }
   return finalText;
+}
+
+function isTerminalAssistantEntry(entries: TranscriptEntry[], index: number): boolean {
+  const entry = entries[index];
+  if (entry?.type !== "assistant") return false;
+  if (entry.stop_reason != null && entry.stop_reason !== "tool_use") return true;
+
+  const laterEntries = entries.slice(index + 1);
+  const hasLaterAssistant = laterEntries.some((candidate) => candidate.type === "assistant");
+  const hasTurnDuration = laterEntries.some(
+    (candidate) => candidate.type === "system" && candidate.subtype === "turn_duration",
+  );
+  return hasTurnDuration && !hasLaterAssistant;
 }
 
 /**

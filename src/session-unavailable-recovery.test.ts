@@ -47,9 +47,18 @@ class RecoveringAdapter implements AgentAdapter {
   sendAttempts = 0;
   createAttempts = 0;
   transcriptPath: string;
+  private readonly failFirstSend: boolean;
+  private readonly responseText: string;
+  private readonly sessionId: string;
 
-  constructor(private readonly transcriptDir: string) {
-    this.transcriptPath = join(transcriptDir, "session-after-restart.jsonl");
+  constructor(
+    private readonly transcriptDir: string,
+    opts: { failFirstSend?: boolean; responseText?: string; sessionId?: string } = {},
+  ) {
+    this.failFirstSend = opts.failFirstSend ?? true;
+    this.responseText = opts.responseText ?? "heartbeat ok";
+    this.sessionId = opts.sessionId ?? "session-after-restart";
+    this.transcriptPath = join(transcriptDir, `${this.sessionId}.jsonl`);
   }
 
   async createAgentWindow(): Promise<void> {
@@ -78,7 +87,7 @@ class RecoveringAdapter implements AgentAdapter {
 
   async sendMessage(_tmuxSession: string, _windowName: string, text: string): Promise<void> {
     this.sendAttempts++;
-    if (this.sendAttempts === 1) {
+    if (this.failFirstSend && this.sendAttempts === 1) {
       throw new Error("Claude Code session is unavailable");
     }
 
@@ -86,12 +95,12 @@ class RecoveringAdapter implements AgentAdapter {
       {
         type: "user",
         message: { content: [{ type: "text", text }] },
-        sessionId: "session-after-restart",
+        sessionId: this.sessionId,
       },
       {
         type: "assistant",
-        message: { content: [{ type: "text", text: "heartbeat ok" }] },
-        sessionId: "session-after-restart",
+        message: { content: [{ type: "text", text: this.responseText }] },
+        sessionId: this.sessionId,
         stop_reason: "end_turn",
       },
     ];
@@ -194,6 +203,45 @@ describe("session unavailable recovery", () => {
       message: {
         stopReason: "stop",
         content: [{ type: "text", text: "heartbeat ok" }],
+      },
+    });
+  });
+
+  it("does not expose the terminal assistant reply as both block text and final done", async () => {
+    const adapter = new RecoveringAdapter(tmpDir, {
+      failFirstSend: false,
+      responseText: "single reply",
+      sessionId: "session-immediate",
+    });
+    const streamFn = createTmuxClaudeStreamFn({
+      config: {
+        defaultModel: "sonnet-4.6",
+        pollingIntervalMs: 1,
+        responseTimeoutMs: 1000,
+        tmuxSession: "test-tmux",
+        workingDirectory: tmpDir,
+      },
+      adapter,
+    });
+    const context: Context = {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+    };
+
+    const events = [];
+    for await (const event of streamFn({}, context)) {
+      events.push(event);
+    }
+
+    const visibleBlockReplies = events
+      .filter((event) => event.type === "text_end")
+      .map((event) => event.content);
+
+    expect(visibleBlockReplies).not.toContain("single reply");
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        stopReason: "stop",
+        content: [{ type: "text", text: "single reply" }],
       },
     });
   });
