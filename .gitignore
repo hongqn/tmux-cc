@@ -6,7 +6,7 @@ dist/
 .agents/
 .claude/
 # Personal/local-only files retained on developer machines but excluded from public repo
-AGENTS.md
+.tmux-cc-deploy.json
 scripts/deploy.sh
 replacements.txt
 # OpenSpec / superpowers / per-agent skill scaffolding (local-only)
