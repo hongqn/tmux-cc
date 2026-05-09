@@ -21,6 +21,9 @@ hooks:
   after_create: |
     gh repo clone hongqn/tmux-cc .
     git fetch origin main --prune
+    if [ -f "$HOME/.config/tmux-cc/deploy.json" ]; then
+      ln -sf "$HOME/.config/tmux-cc/deploy.json" .tmux-cc-deploy.json
+    fi
 agent:
   max_concurrent_agents: 1
   max_turns: 20
