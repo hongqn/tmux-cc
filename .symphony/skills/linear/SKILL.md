@@ -28,8 +28,10 @@ Tool input:
 - Send one GraphQL operation per tool call.
 - Treat top-level `errors` as failure even when the tool call returns normally.
 - Query only fields needed for the current operation.
-- Prefer editing persistent `## Codex Workpad` and `## Review Handoff` comments
-  over creating extra progress comments.
+- Prefer editing the three persistent comments — `## Spec`, `## Codex Workpad`,
+  and `## Review Handoff` — over creating extra progress comments. Spec and
+  Workpad are edited in place; a new Handoff comment is created for every
+  `Human Review` transition.
 - Keep Linear-facing content in Chinese.
 - Do not paste private deployment identifiers, host-specific paths, secrets, or
   conversation/session transcripts into Linear comments.
@@ -69,8 +71,9 @@ query IssueByKey($key: String!) {
 
 ## Comment update pattern
 
-1. Search existing comments for the marker header.
-2. Update that comment when found.
-3. Create a new marked comment only when none exists.
-4. Update the workpad first, then update the handoff last.
+1. Search existing comments for the marker header (`## Spec`, `## Codex Workpad`, or `## Review Handoff`).
+2. For Spec and Workpad, update that comment in place when found; preserve the comment ID across attempts and full resets.
+3. For Handoff, create a new marked comment for each `Human Review` transition; never edit or reuse a prior Handoff comment.
+4. Create a new marked comment only when none exists for Spec/Workpad; for Handoff, always create new.
+5. Update order at every stop for human action: Spec (only if scope/approach/acceptance/assumptions changed) -> Workpad -> new Handoff. The latest visible comment must be the compact Handoff.
 
