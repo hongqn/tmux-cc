@@ -37,6 +37,14 @@
  * to fresh start (user notices "it forgot" once).
  */
 
+import {
+  clearPendingRotations as clearPersistedPendingRotations,
+  consumePendingRotation as consumePersistedPendingRotation,
+  getPendingRotation as getPersistedPendingRotation,
+  persistPendingRotation,
+  removePendingRotation as removePersistedPendingRotation,
+} from "./session-persistence.js";
+
 export interface PendingRotation {
   /** CC's compact summary text, including its native continuation prefix. */
   summary: string;
@@ -62,16 +70,22 @@ export function stashPendingRotation(
 ): void {
   if (!sessionKeyName) return;
   pending.set(sessionKeyName, rotation);
+  persistPendingRotation(sessionKeyName, rotation);
 }
 
 export function hasPendingRotation(sessionKeyName: string | null | undefined): boolean {
   if (!sessionKeyName) return false;
   const entry = pending.get(sessionKeyName);
-  if (!entry) return false;
-  if (Date.now() - entry.detectedAt > ROTATION_TTL_MS) {
+  if (entry) {
+    if (Date.now() - entry.detectedAt <= ROTATION_TTL_MS) return true;
     pending.delete(sessionKeyName);
+    removePersistedPendingRotation(sessionKeyName);
     return false;
   }
+
+  const persisted = getPersistedPendingRotation(sessionKeyName, ROTATION_TTL_MS);
+  if (!persisted) return false;
+  pending.set(sessionKeyName, persisted);
   return true;
 }
 
@@ -81,19 +95,24 @@ export function consumePendingRotation(
   if (!sessionKeyName) return undefined;
   const entry = pending.get(sessionKeyName);
   pending.delete(sessionKeyName);
-  if (!entry) return undefined;
-  if (Date.now() - entry.detectedAt > ROTATION_TTL_MS) return undefined;
-  return entry;
+  if (entry) {
+    removePersistedPendingRotation(sessionKeyName);
+    if (Date.now() - entry.detectedAt > ROTATION_TTL_MS) return undefined;
+    return entry;
+  }
+  return consumePersistedPendingRotation(sessionKeyName, ROTATION_TTL_MS);
 }
 
 /** Test-only: drop a single stash without consuming. */
 export function clearPendingRotation(sessionKeyName: string): void {
   pending.delete(sessionKeyName);
+  removePersistedPendingRotation(sessionKeyName);
 }
 
 /** Test-only: drop all stashes. */
 export function clearAllPendingRotations(): void {
   pending.clear();
+  clearPersistedPendingRotations();
 }
 
 /**

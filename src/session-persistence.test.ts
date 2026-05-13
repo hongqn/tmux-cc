@@ -24,6 +24,9 @@ import {
   persistSession,
   removePersistedSession,
   getPersistedClaudeSessionId,
+  persistPendingRotation,
+  getPendingRotation,
+  consumePendingRotation,
 } from "./session-persistence.js";
 
 describe("session-persistence", () => {
@@ -152,5 +155,32 @@ describe("session-persistence", () => {
 
   it("removes non-existent key without error", () => {
     expect(() => removePersistedSession("nonexistent")).not.toThrow();
+  });
+
+  it("persists and consumes a pending rotation exactly once", () => {
+    const rotation = {
+      summary: "compact summary",
+      oldClaudeSessionId: "old-session",
+      detectedAt: Date.now(),
+    };
+
+    persistPendingRotation("agent:main:main", rotation);
+
+    expect(getPendingRotation("agent:main:main", 60_000)).toEqual(rotation);
+    expect(consumePendingRotation("agent:main:main", 60_000)).toEqual(rotation);
+    expect(getPendingRotation("agent:main:main", 60_000)).toBeUndefined();
+    expect(consumePendingRotation("agent:main:main", 60_000)).toBeUndefined();
+  });
+
+  it("drops expired pending rotations when read", () => {
+    persistPendingRotation("agent:main:main", {
+      summary: "stale summary",
+      detectedAt: Date.now() - 3_600_001,
+    });
+
+    expect(getPendingRotation("agent:main:main", 3_600_000)).toBeUndefined();
+
+    const onDisk = JSON.parse(readFileSync(persistPath, "utf-8"));
+    expect(onDisk.pendingRotations["agent:main:main"]).toBeUndefined();
   });
 });
