@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  containsContextLimitError,
   deriveSessionKey,
   extractNewUserMessages,
   extractSteeringText,
@@ -351,6 +352,22 @@ agents.defaults.bootstrapTotalMaxChars.`;
 
       const result = stripBootstrapWarnings(text);
       expect(result).toBe("");
+    });
+  });
+
+  describe("containsContextLimitError", () => {
+    it("matches the exact CC error string", () => {
+      expect(containsContextLimitError("API Error: Extra usage is required for 1M context • run /extra-usage to enable, or /model to switch to standard context")).toBe(true);
+    });
+
+    it("matches case-insensitively", () => {
+      expect(containsContextLimitError("extra usage is required for 1m context")).toBe(true);
+    });
+
+    it("does not match unrelated errors", () => {
+      expect(containsContextLimitError("rate limit exceeded")).toBe(false);
+      expect(containsContextLimitError("some random error")).toBe(false);
+      expect(containsContextLimitError("")).toBe(false);
     });
   });
 

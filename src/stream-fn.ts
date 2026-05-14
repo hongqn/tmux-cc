@@ -672,6 +672,18 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           }
         }
 
+        // Detect context limit errors (e.g. "Extra usage is required for 1M context").
+        // CC can't auto-compact past this threshold; clear the persisted session so the
+        // next turn starts fresh instead of re-resuming the same oversized transcript.
+        if (response.text && containsContextLimitError(response.text)) {
+          console.log(`[tmux-cc] context limit detected in response — clearing session for fresh start on next turn`);
+          removePersistedSession(sessionKey);
+          removeStableSessionKeysFor(sessionKey);
+          deleteSession(sessionKey, config, adapter).catch((e) =>
+            console.error(`[tmux-cc] context limit cleanup: deleteSession failed: ${e instanceof Error ? e.message : e}`),
+          );
+        }
+
         // Step 9: Emit the response as structured stream close events.
         // `start` was emitted in Step 7.5. Progress text events have been
         // emitted during polling via `onNewEntries` (one text block per CC
@@ -977,6 +989,24 @@ const RATE_LIMIT_PATTERNS = [
  */
 function containsRateLimitError(content: string): boolean {
   return RATE_LIMIT_PATTERNS.some(re => re.test(content));
+}
+
+/**
+ * Regex patterns that indicate a context window limit error.
+ * CC emits "Extra usage is required for 1M context" when the session
+ * transcript exceeds the standard context window.
+ */
+const CONTEXT_LIMIT_PATTERNS = [
+  /extra usage is required for 1[Mm] context/i,
+  /extra.?usage.*1[Mm]/i,
+  /1[Mm] context.*extra.?usage/i,
+];
+
+/**
+ * Check if a response string contains a context limit error from CC.
+ */
+export function containsContextLimitError(content: string): boolean {
+  return CONTEXT_LIMIT_PATTERNS.some(re => re.test(content));
 }
 
 async function waitForAgentIdleAfterPossibleCompact(
