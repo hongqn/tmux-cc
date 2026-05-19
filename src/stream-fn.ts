@@ -55,6 +55,13 @@ const SEND_CONFIRM_TIMEOUT_MS = 45_000;
 const SEND_CONFIRM_RETRY_DELAY_MS = 1000;
 const SEND_CONFIRM_MAX_ATTEMPTS = 3;
 
+export function shouldScheduleEagerCleanup(
+  sessionKeyName: string | null | undefined,
+  completedTurnCount: number,
+): boolean {
+  return completedTurnCount <= 1 && isEphemeralSessionKeyName(sessionKeyName);
+}
+
 export interface StreamFnOptions {
   /** Plugin configuration. */
   config: TmuxClaudeConfig;
@@ -710,9 +717,9 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Track turns and schedule eager cleanup for one-shot sessions
         if (session) {
           session.turnCount++;
-          // Only eager-clean sessions with few turns (likely cron one-shots).
-          // Multi-turn conversations are kept alive for the full idle timeout.
-          if (session.turnCount <= 1) {
+          // Only eager-clean session kinds that are explicitly independent
+          // one-shot runs. Main/chat sessions must stay alive for later injects.
+          if (shouldScheduleEagerCleanup(sessionKeyName, session.turnCount)) {
             scheduleEagerCleanup(session.sessionKey, config, session.adapter);
           }
         }
