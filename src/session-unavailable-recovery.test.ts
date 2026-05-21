@@ -50,14 +50,21 @@ class RecoveringAdapter implements AgentAdapter {
   private readonly failFirstSend: boolean;
   private readonly responseText: string;
   private readonly sessionId: string;
+  private readonly progressText?: string;
 
   constructor(
     private readonly transcriptDir: string,
-    opts: { failFirstSend?: boolean; responseText?: string; sessionId?: string } = {},
+    opts: {
+      failFirstSend?: boolean;
+      responseText?: string;
+      sessionId?: string;
+      progressText?: string;
+    } = {},
   ) {
     this.failFirstSend = opts.failFirstSend ?? true;
     this.responseText = opts.responseText ?? "heartbeat ok";
     this.sessionId = opts.sessionId ?? "session-after-restart";
+    this.progressText = opts.progressText;
     this.transcriptPath = join(transcriptDir, `${this.sessionId}.jsonl`);
   }
 
@@ -91,19 +98,29 @@ class RecoveringAdapter implements AgentAdapter {
       throw new Error("Claude Code session is unavailable");
     }
 
-    const entries = [
+    const entries: Array<Record<string, unknown>> = [
       {
         type: "user",
         message: { content: [{ type: "text", text }] },
         sessionId: this.sessionId,
       },
-      {
-        type: "assistant",
-        message: { content: [{ type: "text", text: this.responseText }] },
-        sessionId: this.sessionId,
-        stop_reason: "end_turn",
-      },
     ];
+    // Optional intermediate "progress" reply (CC's prose before a tool call).
+    // It carries stop_reason "tool_use", so it streams as a visible block.
+    if (this.progressText) {
+      entries.push({
+        type: "assistant",
+        message: { content: [{ type: "text", text: this.progressText }] },
+        sessionId: this.sessionId,
+        stop_reason: "tool_use",
+      });
+    }
+    entries.push({
+      type: "assistant",
+      message: { content: [{ type: "text", text: this.responseText }] },
+      sessionId: this.sessionId,
+      stop_reason: "end_turn",
+    });
     writeFileSync(this.transcriptPath, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   }
 
@@ -207,7 +224,10 @@ describe("session unavailable recovery", () => {
     });
   });
 
-  it("does not expose the terminal assistant reply as both block text and final done", async () => {
+  it("emits the terminal assistant reply exactly once as a block reply", async () => {
+    // The terminal reply must be delivered as a text_end block (the gateway's
+    // only delivery channel once streaming has started) — but exactly once,
+    // not duplicated by both progressive streaming and the final emit.
     const adapter = new RecoveringAdapter(tmpDir, {
       failFirstSend: false,
       responseText: "single reply",
@@ -236,7 +256,7 @@ describe("session unavailable recovery", () => {
       .filter((event) => event.type === "text_end")
       .map((event) => event.content);
 
-    expect(visibleBlockReplies).not.toContain("single reply");
+    expect(visibleBlockReplies.filter((text) => text === "single reply")).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({
       type: "done",
       message: {
@@ -244,5 +264,44 @@ describe("session unavailable recovery", () => {
         content: [{ type: "text", text: "single reply" }],
       },
     });
+  });
+
+  it("delivers the terminal reply as a block reply when progress text streamed first", async () => {
+    // Regression: a turn that emits prose, then a tool call, then a final
+    // answer. The progress prose streams as a text_end block; once anything
+    // has streamed, the gateway drops the `done` message's payloads — so the
+    // terminal answer MUST also be emitted as its own text_end block, or the
+    // user never receives it.
+    const adapter = new RecoveringAdapter(tmpDir, {
+      failFirstSend: false,
+      progressText: "checking config",
+      responseText: "here is the answer",
+      sessionId: "session-multi-segment",
+    });
+    const streamFn = createTmuxClaudeStreamFn({
+      config: {
+        defaultModel: "sonnet-4.6",
+        pollingIntervalMs: 1,
+        responseTimeoutMs: 1000,
+        tmuxSession: "test-tmux",
+        workingDirectory: tmpDir,
+      },
+      adapter,
+    });
+    const context: Context = {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+    };
+
+    const events = [];
+    for await (const event of streamFn({}, context)) {
+      events.push(event);
+    }
+
+    const visibleBlockReplies = events
+      .filter((event) => event.type === "text_end")
+      .map((event) => event.content);
+
+    expect(visibleBlockReplies).toContain("checking config");
+    expect(visibleBlockReplies).toContain("here is the answer");
   });
 });

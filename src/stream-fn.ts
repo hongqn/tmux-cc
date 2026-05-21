@@ -433,11 +433,6 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
           lastStreamEventMs = Date.now();
         };
 
-        const appendFinalText = (text: string) => {
-          const block: TextContent = { type: "text", text };
-          partialContent.push(block);
-        };
-
         const onNewEntries = (allEntries: TranscriptEntry[]) => {
           for (let i = lastProcessedEntryIdx; i < allEntries.length; i++) {
             const entry = allEntries[i];
@@ -687,15 +682,29 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         // Step 9: Emit the response as structured stream close events.
         // `start` was emitted in Step 7.5. Progress text events have been
         // emitted during polling via `onNewEntries` (one text block per CC
-        // transcript entry). Only text not already streamed is appended here.
+        // transcript entry). Only text not already streamed is emitted here.
 
         const finalResponseText = extractUnstreamedFinalText(response.text, streamedTextParts);
         const assistantMessage = makePartial();
         console.log(`[tmux-cc] emitting stream events: stopReason=${assistantMessage.stopReason}, contentBlocks=${assistantMessage.content.length}, thinkingBlocks=${partialContent.filter(b => b.type === "thinking").length}, model=${session.model}`);
 
+        // Emit the not-yet-streamed final text as its own block reply via
+        // text_* events — NOT only into the `done` message. Once any block
+        // reply has streamed, the gateway discards the `done` message's
+        // payloads (block-reply-pipeline `shouldDropFinalPayloads`), so a
+        // terminal reply that lives only in `done` is never delivered.
+        // `onNewEntries` already skips the terminal assistant entry
+        // (isTerminalAssistantEntry), so emitting it once here is not a
+        // duplicate.
         if (finalResponseText) {
-          appendFinalText(finalResponseText);
-          console.log(`[tmux-cc] appended final text to done message only, len=${finalResponseText.length}`);
+          const textBlock: TextContent = { type: "text", text: finalResponseText };
+          partialContent.push(textBlock);
+          const textContentIndex = partialContent.length - 1;
+          const finalMessage = makePartial();
+          stream.push({ type: "text_start", contentIndex: textContentIndex, partial: finalMessage });
+          stream.push({ type: "text_delta", contentIndex: textContentIndex, delta: finalResponseText, partial: finalMessage });
+          stream.push({ type: "text_end", contentIndex: textContentIndex, content: finalResponseText, partial: finalMessage });
+          console.log(`[tmux-cc] pushed final text as block reply, len=${finalResponseText.length}`);
         } else if (response.text) {
           console.log(`[tmux-cc] skipped duplicate final text already emitted via progressive stream, len=${response.text.length}`);
         }
