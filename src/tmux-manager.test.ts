@@ -179,6 +179,34 @@ describe("tmux-manager", () => {
       expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);
     });
 
+    it("returns true when the unavailable marker appears only in indented tool-result output", async () => {
+      // Regression: main's CC reads another agent's status, which contains
+      // "Claude Code session is unavailable" indented inside a ⎿ block.
+      // This must NOT be treated as main's own session being unavailable.
+      const indentedToolResult = [
+        "  ⎿  === agent:kurumi:main | status=failed ===",
+        "       [assistant]: Claude Code session is unavailable: Command failed: tmux send-keys",
+        "",
+        "────────────────────────────────────────────────────────────────────────────────",
+        "❯ ",
+      ].join("\n");
+      execMock.mockImplementation((cmd: string, _opts: any, callback?: Function) => {
+        const cb = typeof _opts === "function" ? _opts : callback;
+        if (cmd.includes("list-panes")) {
+          if (cb) cb(null, { stdout: "claude 0", stderr: "" });
+          return {};
+        }
+        if (cmd.includes("capture-pane")) {
+          if (cb) cb(null, { stdout: indentedToolResult, stderr: "" });
+          return {};
+        }
+        if (cb) cb(null, { stdout: "", stderr: "" });
+        return {};
+      });
+
+      expect(await isProcessAlive("test-session", "cc-window1")).toBe(true);
+    });
+
     it("returns false on error", async () => {
       execMock.mockImplementation(mockError("window not found"));
       expect(await isProcessAlive("test-session", "cc-window1")).toBe(false);

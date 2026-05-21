@@ -262,7 +262,11 @@ export async function isProcessAlive(tmuxSession: string, windowName: string, pr
 }
 
 export function isClaudeSessionUnavailablePane(content: string): boolean {
-  return content.includes(CLAUDE_SESSION_UNAVAILABLE_MARKER);
+  // Only match on non-indented lines. The real CC unavailable message appears
+  // at the start of a line (e.g. "⚠️ Claude Code session is unavailable..."),
+  // while the same string can appear indented inside ⎿ tool-result blocks when
+  // CC is reading another agent's status — causing false-positive dead detection.
+  return content.split("\n").some((line) => !line.startsWith(" ") && line.includes(CLAUDE_SESSION_UNAVAILABLE_MARKER));
 }
 
 /**
