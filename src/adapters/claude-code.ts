@@ -147,7 +147,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     resumeSessionId?: string;
     agentAccountId?: string;
   }): Promise<void> {
-    const extraEnvVars: Record<string, string> = {};
+    const extraEnvVars: Record<string, string> = {
+      CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+    };
     if (params.agentAccountId) {
       extraEnvVars.OPENCLAW_AGENT_ACCOUNT_ID = params.agentAccountId;
     }
