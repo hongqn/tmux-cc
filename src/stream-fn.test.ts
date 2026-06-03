@@ -360,8 +360,13 @@ agents.defaults.bootstrapTotalMaxChars.`;
       expect(containsContextLimitError("API Error: Extra usage is required for 1M context • run /extra-usage to enable, or /model to switch to standard context")).toBe(true);
     });
 
+    it("matches the new usage credits CC error string", () => {
+      expect(containsContextLimitError("API Error: Usage credits required for 1M context · run /usage-credits to turn them on, or /model to switch to standard context")).toBe(true);
+    });
+
     it("matches case-insensitively", () => {
       expect(containsContextLimitError("extra usage is required for 1m context")).toBe(true);
+      expect(containsContextLimitError("usage credits required for 1m context")).toBe(true);
     });
 
     it("does not match unrelated errors", () => {
