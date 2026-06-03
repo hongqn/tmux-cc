@@ -1002,13 +1002,13 @@ function containsRateLimitError(content: string): boolean {
 
 /**
  * Regex patterns that indicate a context window limit error.
- * CC emits "Extra usage is required for 1M context" when the session
- * transcript exceeds the standard context window.
+ * CC emits "Extra usage is required for 1M context" or "Usage credits required for 1M context"
+ * when the session transcript exceeds the standard context window.
  */
 const CONTEXT_LIMIT_PATTERNS = [
-  /extra usage is required for 1[Mm] context/i,
-  /extra.?usage.*1[Mm]/i,
-  /1[Mm] context.*extra.?usage/i,
+  /(extra usage|usage credits) (is )?required for 1[Mm] context/i,
+  /(extra.?usage|usage.?credits).*1[Mm]/i,
+  /1[Mm] context.*(extra.?usage|usage.?credits)/i,
 ];
 
 /**

@@ -2,6 +2,7 @@
   "id": "tmux-cc",
   "enabledByDefault": false,
   "providers": ["tmux-cc", "tmux-copilot"],
+  "syntheticAuthRefs": ["tmux-cc", "tmux-copilot"],
   "providerAuthEnvVars": {},
   "providerAuthChoices": [
     {
