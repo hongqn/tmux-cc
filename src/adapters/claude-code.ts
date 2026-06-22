@@ -65,7 +65,7 @@ const CLAUDE_MODELS: AgentModelDef[] = [
   {
     id: "sonnet-4.5",
     name: "Claude Sonnet 4.5 (tmux)",
-    agentModelId: "claude-sonnet-4-5-20250514",
+    agentModelId: "claude-sonnet-4-5-20250929",
     reasoning: true,
     contextWindow: 200_000,
     maxTokens: 16_384,
@@ -73,7 +73,7 @@ const CLAUDE_MODELS: AgentModelDef[] = [
   {
     id: "haiku-4.5",
     name: "Claude Haiku 4.5 (tmux)",
-    agentModelId: "claude-haiku-4-5-20250514",
+    agentModelId: "claude-haiku-4-5-20251001",
     reasoning: false,
     contextWindow: 200_000,
     maxTokens: 8_192,
