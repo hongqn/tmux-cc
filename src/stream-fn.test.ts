@@ -9,6 +9,7 @@ import {
   extractNewUserMessages,
   extractSteeringText,
   extractUnstreamedFinalText,
+  shouldScheduleEagerCleanup,
   stripBootstrapWarnings,
   transcriptContainsUserText,
   updateTranscriptPath,
@@ -540,6 +541,23 @@ agents.defaults.bootstrapTotalMaxChars.`;
     it("deriveSessionKey with different sessionId fallback yields different keys (fresh-per-run)", () => {
       const messages: Message[] = [{ role: "user", content: "run cron task", timestamp: 1000 }];
       expect(deriveSessionKey(messages, "cron-run-1")).not.toBe(deriveSessionKey(messages, "cron-run-2"));
+    });
+  });
+
+  describe("shouldScheduleEagerCleanup", () => {
+    it("only schedules eager cleanup for first-turn ephemeral sessions", () => {
+      expect(shouldScheduleEagerCleanup("agent:main:cron:job-1", 1)).toBe(true);
+      expect(shouldScheduleEagerCleanup("agent:horo:telegram:btw:42", 1)).toBe(true);
+
+      expect(shouldScheduleEagerCleanup("agent:main:main", 1)).toBe(false);
+      expect(shouldScheduleEagerCleanup("agent:horo:telegram:chat:-100", 1)).toBe(false);
+      expect(shouldScheduleEagerCleanup("agent:horo:telegram:slash:123", 1)).toBe(false);
+      expect(shouldScheduleEagerCleanup(undefined, 1)).toBe(false);
+    });
+
+    it("does not schedule eager cleanup after the first completed turn", () => {
+      expect(shouldScheduleEagerCleanup("agent:main:cron:job-1", 2)).toBe(false);
+      expect(shouldScheduleEagerCleanup("agent:horo:telegram:btw:42", 2)).toBe(false);
     });
   });
 
