@@ -185,6 +185,14 @@ const COPILOT_MODELS: AgentModelDef[] = [
   },
   // Claude models
   {
+    id: "claude-opus-4.8",
+    name: "Claude Opus 4.8 (copilot)",
+    agentModelId: "claude-opus-4-8",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
     id: "claude-sonnet-4.6",
     name: "Claude Sonnet 4.6 (copilot)",
     agentModelId: "claude-sonnet-4.6",

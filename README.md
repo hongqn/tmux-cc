@@ -77,6 +77,7 @@ All settings are optional. Configure via `openclaw config set`:
 
 Select a model by setting the gateway model to one of:
 
+- `tmux-cc/opus-4.8`
 - `tmux-cc/opus-4.6`
 - `tmux-cc/sonnet-4.6`
 - `tmux-cc/sonnet-4.5`
