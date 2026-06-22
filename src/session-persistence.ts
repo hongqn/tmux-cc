@@ -93,10 +93,8 @@ export function loadPersistedSessions(): Map<string, PersistedSession> {
 }
 
 /**
- * Build the composite persistence key. Scoping by adapter prevents the
- * mid-stream fallback path from feeding Copilot's session ID to the CC
- * adapter (which exits immediately when --resume references a file that
- * doesn't exist in ~/.claude/projects/), and vice versa.
+ * Build the composite persistence key. Scoping by adapter ensures separate
+ * session tracking for each adapter type.
  */
 function persistKey(sessionKey: string, adapterId: string): string {
   return `${sessionKey}::${adapterId}`;
@@ -152,10 +150,7 @@ export function removePersistedSession(sessionKey: string, adapterId?: string): 
 
 /**
  * Look up a persisted Claude session ID for a given (sessionKey, adapter)
- * pair. Legacy un-scoped entries are ignored on purpose — feeding e.g.
- * Copilot's session id to the CC adapter's --resume kills the process.
- * After the first persistSession call with a scoped key, the legacy
- * entry is orphaned and pruned by the 7-day TTL in loadPersistedSessions.
+ * pair.
  */
 export function getPersistedClaudeSessionId(
   sessionKey: string,

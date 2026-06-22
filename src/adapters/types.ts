@@ -1,5 +1,5 @@
 /**
- * AgentAdapter interface — abstraction layer for CLI agents (Claude Code, Copilot CLI, etc.).
+ * AgentAdapter interface — abstraction layer for Claude Code CLI.
  *
  * Each adapter encapsulates the agent-specific logic:
  * - How to launch and detect the agent in tmux

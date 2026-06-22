@@ -292,7 +292,7 @@ export function parseLine(line: string): TranscriptEntry | null {
       if (askUserBlock) {
         stopReason = "ask_user";
         // Surface the question(s) as text so the response emitted to the
-        // user includes them, mirroring Copilot CLI's ask_user handling.
+        // user includes them.
         const questionText = extractAskUserQuestionText(askUserBlock.input);
         if (questionText) {
           normalizedContent.push({ type: "text", text: `\n\n${questionText}` });

@@ -228,8 +228,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
    * Enter key select whichever option is currently highlighted — the
    * typed characters can either be ignored or fuzzy-match an option, and
    * the agent sees `User answered Claude's questions: Q → <wrong option>`
-   * instead of the user's actual message. This is the same failure mode
-   * the Copilot adapter already avoids for its own ask_user UI.
+   * instead of the user's actual message.
    *
    * CC's AskUserQuestion TUI lays out options as:
    *   ❯ 1. <agent option 1>

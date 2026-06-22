@@ -78,30 +78,6 @@ describe("session-map", () => {
     });
   });
 
-  describe("adapter-scoped runtime sessions", () => {
-    it("keeps separate live sessions for different adapters sharing one logical session key", async () => {
-      vi.mocked(tmuxManager.windowExists).mockResolvedValue(false);
-      const copilotAdapter = makeAdapter("copilot-cli");
-      const claudeAdapter = makeAdapter("claude-code");
-      const config = { tmuxSession: "test-tmux", workingDirectory: "/tmp/test-wd" };
-
-      const copilotSession = await getOrCreateSession("shared-session", "claude-opus-4.6", config, copilotAdapter);
-      const claudeSession = await getOrCreateSession("shared-session", "sonnet-4.6", config, claudeAdapter);
-
-      expect(copilotSession.sessionKey).toBe("shared-session");
-      expect(claudeSession.sessionKey).toBe("shared-session");
-      expect(copilotSession.windowName).not.toBe(claudeSession.windowName);
-      expect(copilotSession.windowName).toContain("copilot-cli");
-      expect(claudeSession.windowName).toContain("claude-code");
-
-      await deleteSession("shared-session", config, copilotAdapter);
-
-      expect(getSession("shared-session", copilotAdapter)).toBeNull();
-      expect(getSession("shared-session", claudeAdapter)).toBe(claudeSession);
-      expect(tmuxManager.killWindow).toHaveBeenCalledWith("test-tmux", copilotSession.windowName);
-      expect(tmuxManager.killWindow).not.toHaveBeenCalledWith("test-tmux", claudeSession.windowName);
-    });
-  });
 
   describe("cleanupOrphanedWindows", () => {
     beforeEach(() => {
