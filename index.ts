@@ -1,8 +1,8 @@
 /**
  * tmux-cc provider plugin entry point.
  *
- * Registers providers that delegate all inference to CLI agents
- * (Claude Code and/or Copilot CLI) running in persistent tmux sessions.
+ * Registers providers that delegate all inference to Claude Code CLI
+ * running in persistent tmux sessions.
  * OpenClaw handles channel routing; the agent handles context, reasoning,
  * and tool use.
  *
@@ -10,7 +10,6 @@
  */
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { ClaudeCodeAdapter } from "./src/adapters/claude-code.js";
-import { CopilotCliAdapter } from "./src/adapters/copilot-cli.js";
 import type { AgentAdapter } from "./src/adapters/types.js";
 import { deleteSession, startCleanupTimer, stopCleanupTimer } from "./src/session-map.js";
 import { removePersistedSession, removeStableSessionKeysFor } from "./src/session-persistence.js";
@@ -19,7 +18,6 @@ import type { TmuxClaudeConfig } from "./src/types.js";
 import { DEFAULT_CONFIG } from "./src/types.js";
 
 const TMUX_CC_PROVIDER_ID = "tmux-cc";
-const COPILOT_PROVIDER_ID = "tmux-copilot";
 
 /**
  * Get plugin config from the OpenClaw config object.
@@ -151,12 +149,12 @@ function registerAdapterProvider(
 export default definePluginEntry({
   id: TMUX_CC_PROVIDER_ID,
   name: "tmux Agent Provider",
-  description: "Provider that delegates inference to CLI agents (Claude Code, Copilot) in tmux sessions",
+  description: "Provider that delegates inference to Claude Code CLI in tmux sessions",
 
   register(api: OpenClawPluginApi) {
     const pluginDir = import.meta.dirname ?? __dirname;
 
-    // Tear down the tmux window and persisted CC/Copilot session ID when
+    // Tear down the tmux window and persisted CC session ID when
     // the user issues /new or /reset. Without this hook, the next message
     // would reuse the existing window because we key by session name (so
     // gateway-side eviction with new UUIDs preserves context). The hook
@@ -180,28 +178,6 @@ export default definePluginEntry({
     const claudeAdapter = new ClaudeCodeAdapter({ pluginDir });
     registerAdapterProvider(api, TMUX_CC_PROVIDER_ID, "Claude Code (tmux)", claudeAdapter);
 
-    // Register Copilot CLI adapter (tmux-copilot provider)
-    try {
-      const pluginConfig = getPluginConfig(api.config as unknown as Record<string, unknown>);
-      const copilotAdapter = new CopilotCliAdapter({
-        pluginDir,
-        // Only enable KPSS (keep-persistent-session) for interactive chat sessions.
-        // Cron, subagent, and other one-shot sessions should not be kept alive.
-        // Configurable via plugins.tmux-cc.kpssSessionWhitelist (default: ["*main"]).
-        kpssSessionWhitelist: pluginConfig.kpssSessionWhitelist ?? ["*main"],
-        // Non-whitelisted sessions (cron, subagent) fall back to Claude Code.
-        kpssNonWhitelistBehavior: { fallback: "sonnet-4.6" },
-        // When Copilot hits Anthropic rate limits, fall back to Claude Code
-        // with the equivalent model for 1 hour before retrying.
-        rateLimitFallbackModels: {
-          "claude-opus-4.8": "opus-4.8",
-          "claude-opus-4.6": "opus-4.6",
-        },
-      });
-      registerAdapterProvider(api, COPILOT_PROVIDER_ID, "Copilot CLI (tmux)", copilotAdapter, claudeAdapter);
-    } catch (err) {
-      console.error(`[tmux-cc] failed to register ${COPILOT_PROVIDER_ID}:`, err);
-    }
   },
 });
 

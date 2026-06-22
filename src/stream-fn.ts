@@ -62,7 +62,7 @@ export interface StreamFnOptions {
   adapter?: AgentAdapter;
   /** Fallback adapter used when the primary adapter's validateSession returns a fallback. */
   fallbackAdapter?: AgentAdapter;
-  /** Provider ID (e.g., "tmux-cc", "tmux-copilot") — used in response metadata. */
+  /** Provider ID (e.g., "tmux-cc") — used in response metadata. */
   providerId?: string;
 }
 
@@ -271,8 +271,7 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         }
 
         // Step 4.2: Let the adapter reject or redirect sessions it shouldn't handle.
-        // E.g., tmux-copilot redirects cron/subagent sessions to the Claude Code
-        // adapter, or rate-limited models to the fallback provider.
+        // E.g., redirects cron/subagent sessions or rate-limited models to a fallback.
         if (adapter?.validateSession) {
           const validation = adapter.validateSession(sessionKeyName ?? sessionId, config.defaultModel);
           if (validation?.fallback && fallbackAdapter) {

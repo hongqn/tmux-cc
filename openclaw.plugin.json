@@ -1,8 +1,8 @@
 {
   "id": "tmux-cc",
   "enabledByDefault": false,
-  "providers": ["tmux-cc", "tmux-copilot"],
-  "syntheticAuthRefs": ["tmux-cc", "tmux-copilot"],
+  "providers": ["tmux-cc"],
+  "syntheticAuthRefs": ["tmux-cc"],
   "providerAuthEnvVars": {},
   "providerAuthChoices": [
     {
@@ -13,15 +13,6 @@
       "choiceHint": "Claude Code CLI running in tmux sessions",
       "groupId": "tmux-cc",
       "groupLabel": "Claude Code (tmux)"
-    },
-    {
-      "provider": "tmux-copilot",
-      "method": "local",
-      "choiceId": "tmux-copilot",
-      "choiceLabel": "Copilot CLI (tmux)",
-      "choiceHint": "GitHub Copilot CLI running in tmux sessions",
-      "groupId": "tmux-copilot",
-      "groupLabel": "Copilot CLI (tmux)"
     }
   ],
   "configSchema": {
@@ -61,12 +52,6 @@
         "type": "string",
         "description": "Default Claude model to use",
         "default": "sonnet-4.6"
-      },
-      "kpssSessionWhitelist": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Session key glob patterns that keep Copilot CLI sessions alive (KPSS). Sessions not matching any pattern fall back to Claude Code.",
-        "default": ["*main"]
       }
     }
   }

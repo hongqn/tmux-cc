@@ -67,14 +67,11 @@ describe("session-persistence", () => {
     expect(sessions.size).toBe(2);
   });
 
-  it("scopes persistence by adapter — Copilot and CC IDs don't cross", () => {
-    // The bug this prevents: mid-stream rate-limit fallback was feeding
-    // Copilot's session id to the CC adapter's --resume, killing the
-    // process on startup because the id doesn't exist in ~/.claude/projects/.
-    persistSession("key-1", "copilot-id", "claude-opus-4.6", "copilot-cli");
+  it("scopes persistence by adapter — different adapter IDs don't cross", () => {
+    persistSession("key-1", "id-2", "model-2", "adapter-2");
     persistSession("key-1", "cc-id", "opus-4.6", "claude-code");
 
-    expect(getPersistedClaudeSessionId("key-1", "copilot-cli")).toBe("copilot-id");
+    expect(getPersistedClaudeSessionId("key-1", "adapter-2")).toBe("id-2");
     expect(getPersistedClaudeSessionId("key-1", "claude-code")).toBe("cc-id");
   });
 
@@ -87,11 +84,11 @@ describe("session-persistence", () => {
   });
 
   it("removes all adapter entries when no adapter id is passed (used by before_reset)", () => {
-    persistSession("key-1", "copilot-id", "claude-opus-4.6", "copilot-cli");
+    persistSession("key-1", "id-2", "model-2", "adapter-2");
     persistSession("key-1", "cc-id", "opus-4.6", "claude-code");
     removePersistedSession("key-1");
 
-    expect(getPersistedClaudeSessionId("key-1", "copilot-cli")).toBeUndefined();
+    expect(getPersistedClaudeSessionId("key-1", "adapter-2")).toBeUndefined();
     expect(getPersistedClaudeSessionId("key-1", "claude-code")).toBeUndefined();
   });
 
