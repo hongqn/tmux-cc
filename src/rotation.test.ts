@@ -1,5 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+// Mock homedir so persisted rotation tests never touch the real OpenClaw state.
+const mockHomeDir = vi.hoisted(() => {
+  const { mkdtempSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  return mkdtempSync(join(tmpdir(), "tmux-cc-rotation-test-"));
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return {
+    ...actual,
+    homedir: () => mockHomeDir,
+  };
+});
+
 import {
   matchCompactSummary,
   stashPendingRotation,
@@ -173,6 +189,7 @@ describe("performRotationIfPending", () => {
   }
 
   beforeEach(() => clearAllPendingRotations());
+  afterEach(() => clearAllPendingRotations());
 
   it("returns null and does nothing when sessionKeyName is empty", async () => {
     const { deps, spies } = makeDeps();
@@ -250,5 +267,30 @@ describe("performRotationIfPending", () => {
     const result = await performRotationIfPending("agent:horo:main", false, deps);
     expect(result).toBe("S");
     expect(spies.removeStableSessionKeysFor).toHaveBeenCalledWith("tmux-old-key");
+  });
+
+  it("consumes a pending rotation after the rotation module is reloaded", async () => {
+    const { deps, spies } = makeDeps();
+    stashPendingRotation("agent:horo:main", {
+      summary: "persisted summary",
+      oldClaudeSessionId: "claude-old-uuid",
+      detectedAt: Date.now(),
+    });
+
+    vi.resetModules();
+    const rotationAfterReload = await import("./rotation.js");
+
+    expect(rotationAfterReload.hasPendingRotation("agent:horo:main")).toBe(true);
+
+    const result = await rotationAfterReload.performRotationIfPending(
+      "agent:horo:main",
+      false,
+      deps,
+    );
+
+    expect(result).toBe("persisted summary");
+    expect(spies.getStableSessionKey).toHaveBeenCalledWith("agent:horo:main");
+    expect(spies.deleteSession).toHaveBeenCalledWith("tmux-old-key");
+    expect(rotationAfterReload.hasPendingRotation("agent:horo:main")).toBe(false);
   });
 });

@@ -20,6 +20,13 @@ interface PersistedSession {
   lastActivityMs: number;
 }
 
+/** Pending CC compact-summary rotation to apply on the next user turn. */
+export interface PersistedPendingRotation {
+  summary: string;
+  oldClaudeSessionId?: string;
+  detectedAt: number;
+}
+
 interface PersistedData {
   sessions: Record<string, PersistedSession>;
   /**
@@ -30,6 +37,11 @@ interface PersistedData {
    * resolvable, different hash) land on the same tmux window.
    */
   stableKeys?: Record<string, { sessionKey: string; lastActivityMs: number }>;
+  /**
+   * Compact summaries observed at the end of one CC session and waiting to be
+   * prepended to the next user turn in a fresh session.
+   */
+  pendingRotations?: Record<string, PersistedPendingRotation>;
 }
 
 const PERSIST_DIR = join(homedir(), ".openclaw");
@@ -46,12 +58,15 @@ function loadRaw(): PersistedData {
       if (!data.stableKeys || typeof data.stableKeys !== "object") {
         data.stableKeys = {};
       }
+      if (!data.pendingRotations || typeof data.pendingRotations !== "object") {
+        data.pendingRotations = {};
+      }
       return data;
     }
   } catch {
     // File doesn't exist or is corrupt — start fresh
   }
-  return { sessions: {}, stableKeys: {} };
+  return { sessions: {}, stableKeys: {}, pendingRotations: {} };
 }
 
 function save(data: PersistedData): void {
@@ -82,7 +97,7 @@ export function loadPersistedSessions(): Map<string, PersistedSession> {
 
   if (pruned) {
     // Write back without stale entries
-    const cleaned: PersistedData = { sessions: {} };
+    const cleaned: PersistedData = { ...data, sessions: {} };
     for (const [key, entry] of result) {
       cleaned.sessions[key] = entry;
     }
@@ -212,4 +227,72 @@ export function removeStableSessionKeysFor(sessionKey: string): void {
     }
   }
   if (changed) save(data);
+}
+
+function isPendingRotationExpired(rotation: PersistedPendingRotation, maxAgeMs: number): boolean {
+  return Date.now() - rotation.detectedAt > maxAgeMs;
+}
+
+/** Persist a compact-summary rotation until the next user turn consumes it. */
+export function persistPendingRotation(
+  sessionKeyName: string,
+  rotation: PersistedPendingRotation,
+): void {
+  if (!sessionKeyName) return;
+  const data = loadRaw();
+  if (!data.pendingRotations) data.pendingRotations = {};
+  data.pendingRotations[sessionKeyName] = rotation;
+  save(data);
+}
+
+/** Read a pending rotation without consuming it. Expired entries are removed. */
+export function getPendingRotation(
+  sessionKeyName: string,
+  maxAgeMs: number,
+): PersistedPendingRotation | undefined {
+  if (!sessionKeyName) return undefined;
+  const data = loadRaw();
+  const rotation = data.pendingRotations?.[sessionKeyName];
+  if (!rotation) return undefined;
+  if (isPendingRotationExpired(rotation, maxAgeMs)) {
+    delete data.pendingRotations?.[sessionKeyName];
+    save(data);
+    return undefined;
+  }
+  return rotation;
+}
+
+/**
+ * Consume a pending rotation exactly once. Expired entries are deleted and not
+ * returned.
+ */
+export function consumePendingRotation(
+  sessionKeyName: string,
+  maxAgeMs: number,
+): PersistedPendingRotation | undefined {
+  if (!sessionKeyName) return undefined;
+  const data = loadRaw();
+  const rotation = data.pendingRotations?.[sessionKeyName];
+  if (!rotation) return undefined;
+  delete data.pendingRotations?.[sessionKeyName];
+  save(data);
+  if (isPendingRotationExpired(rotation, maxAgeMs)) return undefined;
+  return rotation;
+}
+
+/** Remove one pending rotation without consuming it. */
+export function removePendingRotation(sessionKeyName: string): void {
+  if (!sessionKeyName) return;
+  const data = loadRaw();
+  if (!data.pendingRotations || !(sessionKeyName in data.pendingRotations)) return;
+  delete data.pendingRotations[sessionKeyName];
+  save(data);
+}
+
+/** Test-only: remove all pending rotations without touching sessions/stable keys. */
+export function clearPendingRotations(): void {
+  const data = loadRaw();
+  if (!data.pendingRotations || Object.keys(data.pendingRotations).length === 0) return;
+  data.pendingRotations = {};
+  save(data);
 }
