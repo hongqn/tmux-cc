@@ -47,6 +47,14 @@ export interface ClaudeCodeAdapterOptions {
 /** Claude models available through Claude Code CLI. */
 const CLAUDE_MODELS: AgentModelDef[] = [
   {
+    id: "opus-4.8",
+    name: "Claude Opus 4.8 (tmux)",
+    agentModelId: "claude-opus-4-8",
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  {
     id: "opus-4.6",
     name: "Claude Opus 4.6 (tmux)",
     agentModelId: "claude-opus-4-6",
