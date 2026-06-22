@@ -101,6 +101,16 @@ export function deriveSessionKey(messages: Message[], sessionId?: string): strin
   return `tmux-${hash}`;
 }
 
+export function resolveSessionKeySeed(
+  sessionKeyName: string | null,
+  sessionId: string | undefined,
+  ephemeral: boolean,
+  makeEphemeralId: () => string = randomUUID,
+): string | undefined {
+  if (!ephemeral) return sessionKeyName ?? sessionId;
+  return sessionId ?? `ephemeral:${makeEphemeralId()}`;
+}
+
 /**
  * Create the StreamFn for the tmux-cc provider.
  *
@@ -233,7 +243,10 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         if (!sessionKey) {
           // For ephemeral runs, fall back to sessionId only — never sessionKeyName —
           // so each invocation derives a fresh key when sessionId is also fresh.
-          const fallback = ephemeral ? sessionId : (sessionKeyName ?? sessionId);
+          // Some internal cron invocations have a cron key but no gateway
+          // sessionId, so generate a per-run seed instead of hashing the same
+          // repeated cron prompt into a reused tmux window.
+          const fallback = resolveSessionKeySeed(sessionKeyName, sessionId, ephemeral);
           sessionKey = deriveSessionKey(context.messages, fallback);
         }
 
