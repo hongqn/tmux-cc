@@ -1369,7 +1369,7 @@ async function pollForResponse(
               } else if (content?.includes("How is Claude doing this session")) {
                 console.log(`[tmux-cc] poll #${pollCount}: auto-dismissing feedback survey`);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "0");
-              } else if (content?.includes("[Pasted text #")) {
+              } else if (content && /\[Pasted\s*text\s*#/i.test(content)) {
                 console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
                 await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
               }
@@ -1474,7 +1474,7 @@ async function pollForResponse(
       } else {
         try {
           const content = await capturePane(config.tmuxSession, session.windowName, 20);
-          if (content?.includes("[Pasted text #")) {
+          if (content && /\[Pasted\s*text\s*#/i.test(content)) {
             console.log(`[tmux-cc] poll #${pollCount}: pasted text not submitted, sending Enter`);
             await sendTmuxKey(config.tmuxSession, session.windowName, "Enter");
           } else if (content?.includes("Yes, I accept") && content?.includes("Bypass Permissions")) {

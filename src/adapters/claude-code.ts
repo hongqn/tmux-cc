@@ -328,7 +328,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         // answers — idleCap fires 10 min later. Pick "0: Dismiss".
         console.log(`[claude-code] auto-dismissing feedback survey`);
         await sendTmuxKey(tmuxSession, windowName, "0");
-      } else if (content.includes("[Pasted text #")) {
+      } else if (/\[Pasted\s*text\s*#/i.test(content)) {
         console.log(`[claude-code] pasted text not submitted, sending Enter`);
         await sendTmuxKey(tmuxSession, windowName, "Enter");
       }
