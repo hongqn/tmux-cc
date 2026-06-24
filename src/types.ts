@@ -18,7 +18,8 @@ export interface TmuxClaudeConfig {
   idleTimeoutMs?: number;
   /** Default Claude model to use (e.g., "sonnet-4.6"). */
   defaultModel?: string;
-
+  /** Mode for streaming intermediate progress (default: "text"). */
+  progressMode?: "text" | "thinking";
 }
 
 export const DEFAULT_CONFIG: Required<TmuxClaudeConfig> = {
@@ -29,6 +30,7 @@ export const DEFAULT_CONFIG: Required<TmuxClaudeConfig> = {
   responseTimeoutMs: 300_000,
   idleTimeoutMs: 1_800_000,
   defaultModel: "sonnet-4.6",
+  progressMode: "text",
 };
 
 /** State for a single Claude Code session mapped to an OpenClaw conversation. */

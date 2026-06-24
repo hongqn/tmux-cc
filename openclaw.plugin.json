@@ -52,6 +52,12 @@
         "type": "string",
         "description": "Default Claude model to use",
         "default": "sonnet-4.6"
+      },
+      "progressMode": {
+        "type": "string",
+        "enum": ["text", "thinking"],
+        "description": "Mode for streaming intermediate progress (text or thinking blocks)",
+        "default": "text"
       }
     }
   }
