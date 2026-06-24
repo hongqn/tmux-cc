@@ -304,4 +304,44 @@ describe("session unavailable recovery", () => {
     expect(visibleBlockReplies).toContain("checking config");
     expect(visibleBlockReplies).toContain("here is the answer");
   });
+
+  it("delivers the progress text as a thinking block when progressMode is 'thinking'", async () => {
+    const adapter = new RecoveringAdapter(tmpDir, {
+      failFirstSend: false,
+      progressText: "checking config",
+      responseText: "here is the answer",
+      sessionId: "session-multi-segment-thinking",
+    });
+    const streamFn = createTmuxClaudeStreamFn({
+      config: {
+        defaultModel: "sonnet-4.6",
+        pollingIntervalMs: 1,
+        responseTimeoutMs: 1000,
+        tmuxSession: "test-tmux",
+        workingDirectory: tmpDir,
+        progressMode: "thinking",
+      },
+      adapter,
+    });
+    const context: Context = {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+    };
+
+    const events = [];
+    for await (const event of streamFn({}, context)) {
+      events.push(event);
+    }
+
+    const visibleBlockReplies = events
+      .filter((event) => event.type === "text_end")
+      .map((event) => event.content);
+
+    const thinkingReplies = events
+      .filter((event) => event.type === "thinking_end")
+      .map((event) => event.content);
+
+    expect(visibleBlockReplies).not.toContain("checking config");
+    expect(visibleBlockReplies).toContain("here is the answer");
+    expect(thinkingReplies).toContain("checking config");
+  });
 });

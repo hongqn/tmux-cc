@@ -421,14 +421,25 @@ export function createTmuxClaudeStreamFn(opts: StreamFnOptions) {
         const streamedTextParts: string[] = [];
 
         const emitProgressText = (text: string) => {
-          const block: TextContent = { type: "text", text };
-          partialContent.push(block);
-          streamedTextParts.push(text);
-          const idx = partialContent.length - 1;
-          const msg = makePartial();
-          stream.push({ type: "text_start", contentIndex: idx, partial: msg });
-          stream.push({ type: "text_delta", contentIndex: idx, delta: text, partial: msg });
-          stream.push({ type: "text_end",   contentIndex: idx, content: text, partial: msg });
+          if (runConfig.progressMode === "thinking") {
+            const block: ThinkingContent = { type: "thinking", thinking: text };
+            partialContent.push(block);
+            streamedTextParts.push(text);
+            const idx = partialContent.length - 1;
+            const msg = makePartial();
+            stream.push({ type: "thinking_start", contentIndex: idx, partial: msg });
+            stream.push({ type: "thinking_delta", contentIndex: idx, delta: text, partial: msg });
+            stream.push({ type: "thinking_end",   contentIndex: idx, content: text, partial: msg });
+          } else {
+            const block: TextContent = { type: "text", text };
+            partialContent.push(block);
+            streamedTextParts.push(text);
+            const idx = partialContent.length - 1;
+            const msg = makePartial();
+            stream.push({ type: "text_start", contentIndex: idx, partial: msg });
+            stream.push({ type: "text_delta", contentIndex: idx, delta: text, partial: msg });
+            stream.push({ type: "text_end",   contentIndex: idx, content: text, partial: msg });
+          }
           lastStreamEventMs = Date.now();
         };
 
